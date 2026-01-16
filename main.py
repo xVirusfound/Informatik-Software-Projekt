@@ -2,6 +2,12 @@
 import sys
 from PyQt5.QtWidgets import QApplication, QWidget, QPushButton, QLabel, QHBoxLayout
 from PyQt5.QtCore import Qt
+from PyQt5 import QtSql
+from PyQt5.QtSql import QSqlDatabase, QSqlQuery
+
+db = QSqlDatabase.addDatabase("QSQLITE")
+db.setDatabaseName("datenbank.db")
+db.open()
 
 class MainWindow(QWidget):
     def __init__(self):
