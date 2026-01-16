@@ -1,5 +1,6 @@
 # main.py
 import sys
+import math
 from PyQt5.QtWidgets import QApplication, QWidget, QPushButton, QLabel, QHBoxLayout
 from PyQt5.QtCore import Qt
 
