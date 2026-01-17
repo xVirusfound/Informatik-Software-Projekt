@@ -10,6 +10,7 @@ class MainWindow(QWidget):
     def __init__(self):
         super().__init__()
         self.init_ui()
+        self.lade_gewohnheiten() #soll das eher in die init funktion?
 
     def init_ui(self):
         self.setWindowTitle("Test App: Button + Counter")
@@ -19,8 +20,6 @@ class MainWindow(QWidget):
         self.list_widget = QListWidget()
         layout.addWidget(self.list_widget)
         self.setLayout(layout)
-
-        self.lade_gewohnheiten #soll das eher in die init funktion?
 
     def lade_gewohnheiten(self):
         # Verbindung zur DB
