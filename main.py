@@ -10,15 +10,21 @@ class MainWindow(QWidget):
     def __init__(self):
         super().__init__()
         self.init_ui()
-        self.lade_gewohnheiten() #soll das eher in die init funktion?
+        self.lade_gewohnheiten()
+        self.lade_maßnahmen()
 
     def init_ui(self):
         self.setWindowTitle("Test App: Button + Counter")
         self.resize(300, 80)
 
         layout = QVBoxLayout()
-        self.list_widget = QListWidget()
-        layout.addWidget(self.list_widget)
+
+        self.list_widget_gewohnheit = QListWidget()
+        layout.addWidget(self.list_widget_gewohnheit)
+
+        self.list_widget_maßnahme = QListWidget()
+        layout.addWidget(self.list_widget_maßnahme)
+
         self.setLayout(layout)
 
     def lade_gewohnheiten(self):
@@ -30,9 +36,24 @@ class MainWindow(QWidget):
         zeilen = c.fetchall()
 
         # Liste mit Items füllen
-        self.list_widget.clear()
+        self.list_widget_gewohnheit.clear()
         for (name,) in zeilen:
-            self.list_widget.addItem(name)
+            self.list_widget_gewohnheit.addItem(name)
+
+        conn.close()
+
+    def lade_maßnahmen(self):
+        # Verbindung zur DB
+        conn = sqlite3.connect("datenbank.db")
+        c = conn.cursor()
+
+        c.execute("SELECT name FROM maßnahme")
+        zeilen = c.fetchall()
+
+        # Liste mit Items füllen
+        self.list_widget_maßnahme.clear()
+        for (name,) in zeilen:
+            self.list_widget_maßnahme.addItem(name)
 
         conn.close()
 
