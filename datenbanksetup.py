@@ -22,4 +22,4 @@ def setup_test_database():
             pass # Falls Name schon existiert, wird er übersprungen
     
     conn.commit()
-    conn.close()
+    conn.close()    
