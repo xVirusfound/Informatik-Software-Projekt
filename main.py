@@ -6,59 +6,7 @@ from PyQt5.QtWidgets import (QApplication, QWidget, QPushButton, QLabel,
                              QCalendarWidget)
 from PyQt5.QtCore import Qt, pyqtSignal
 from PyQt5.QtGui import QFont
-
-# --- Datenbank Setup ---
-def setup_test_database():
-    conn = sqlite3.connect("datenbank.db")
-    c = conn.cursor()
-    
-    # 1. Tabellen erstellen
-    c.execute("CREATE TABLE IF NOT EXISTS gewohnheit (id INTEGER PRIMARY KEY, name TEXT, beschreibung TEXT)")
-    c.execute("CREATE TABLE IF NOT EXISTS maßnahme (id INTEGER PRIMARY KEY, name TEXT, gewohnheit_id INTEGER, erledigt INTEGER DEFAULT 0)")
-    
-    # 2. MIGRATIONEN (Datenbank updaten, falls alte Version existiert)
-    try:
-        c.execute("ALTER TABLE maßnahme ADD COLUMN gewohnheit_id INTEGER")
-    except sqlite3.OperationalError: pass
-    
-    try:
-        c.execute("ALTER TABLE gewohnheit ADD COLUMN beschreibung TEXT")
-    except sqlite3.OperationalError: pass
-
-    try:
-        c.execute("ALTER TABLE maßnahme ADD COLUMN erledigt INTEGER DEFAULT 0")
-    except sqlite3.OperationalError: pass
-
-    # 3. Daten einfügen (Nur wenn DB leer ist)
-    c.execute("SELECT count(*) FROM gewohnheit")
-    if c.fetchone()[0] == 0:
-        print("Erstelle Datenbank mit 4 Habits...")
-
-        # --- HABIT 1: Sport ---
-        c.execute("INSERT INTO gewohnheit (name, beschreibung) VALUES ('Sport machen', 'Jeden zweiten Tag trainieren.')")
-        h1_id = c.lastrowid
-        c.execute("INSERT INTO maßnahme (name, gewohnheit_id, erledigt) VALUES ('Laufschuhe anziehen', ?, 0)", (h1_id,))
-        c.execute("INSERT INTO maßnahme (name, gewohnheit_id, erledigt) VALUES ('Fitnessstudio Karte einpacken', ?, 0)", (h1_id,))
-
-        # --- HABIT 2: Essen ---
-        c.execute("INSERT INTO gewohnheit (name, beschreibung) VALUES ('Gesund essen', 'Mehr Gemüse, weniger Zucker.')")
-        h2_id = c.lastrowid
-        c.execute("INSERT INTO maßnahme (name, gewohnheit_id, erledigt) VALUES ('Gemüse kaufen', ?, 0)", (h2_id,))
-
-        # --- HABIT 3: Aufstehen ---
-        c.execute("INSERT INTO gewohnheit (name, beschreibung) VALUES ('Früh aufstehen', 'Ziel: 06:00 Uhr aufstehen.')")
-        h3_id = c.lastrowid
-        c.execute("INSERT INTO maßnahme (name, gewohnheit_id, erledigt) VALUES ('QR Code Wecker nutzen', ?, 0)", (h3_id,))
-
-        # --- HABIT 4: Doom Scrollen ---
-        c.execute("INSERT INTO gewohnheit (name, beschreibung) VALUES ('Nicht Doom Scrollen', 'Kein TikTok vor dem Schlafen.')")
-        h4_id = c.lastrowid
-        c.execute("INSERT INTO maßnahme (name, gewohnheit_id, erledigt) VALUES ('App Blocker installieren', ?, 0)", (h4_id,))
-        
-        conn.commit()
-        print("Datenbank erfolgreich gefüllt.")
-        
-    conn.close()
+from datenbanksetup import setup_test_database
 
 # --- Ansichten ---
 
@@ -164,10 +112,8 @@ class DetailAnsicht(QWidget):
         
         self.calendar = QCalendarWidget()
         self.calendar.setGridVisible(True)
-        # HIER WURDE DIE GRÖSSE BEGRENZT:
         self.calendar.setMaximumSize(350, 250) 
         
-        # Alignment sorgt dafür, dass er oben bleibt
         right_layout.addWidget(self.calendar, alignment=Qt.AlignTop)
         
         content_layout.addLayout(right_layout, stretch=1)
@@ -183,7 +129,6 @@ class DetailAnsicht(QWidget):
         conn = sqlite3.connect("datenbank.db")
         c = conn.cursor()
         
-        # Beschreibung laden
         c.execute("SELECT beschreibung FROM gewohnheit WHERE name = ?", (habit_name,))
         result = c.fetchone()
         if result and result[0]:
@@ -191,7 +136,6 @@ class DetailAnsicht(QWidget):
         else:
             self.txt_beschreibung.clear()
 
-        # Maßnahmen laden
         query = """
         SELECT m.id, m.name, m.erledigt 
         FROM maßnahme m

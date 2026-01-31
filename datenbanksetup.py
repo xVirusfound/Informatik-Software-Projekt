@@ -1,39 +1,25 @@
 import sqlite3
 
-conn = sqlite3.connect("datenbank.db")
-c = conn.cursor()
+def setup_test_database():
+    conn = sqlite3.connect("datenbank.db")
+    c = conn.cursor()
+    
+    # UNIQUE sorgt dafür, dass Namen nicht doppelt gespeichert werden
+    c.execute("CREATE TABLE IF NOT EXISTS gewohnheit (id INTEGER PRIMARY KEY, name TEXT UNIQUE, beschreibung TEXT)")
+    c.execute("CREATE TABLE IF NOT EXISTS maßnahme (id INTEGER PRIMARY KEY, name TEXT, gewohnheit_id INTEGER, erledigt INTEGER DEFAULT 0)")
+    
+    habits = [
+        ('Sport machen', 'Jeden zweiten Tag trainieren.'),
+        ('Gesund essen', 'Mehr Gemüse, weniger Zucker.'),
+        ('Früh aufstehen', 'Ziel: 06:00 Uhr aufstehen.'),
+        ('Nicht Doom Scrollen', 'Kein TikTok vor dem Schlafen.')
+    ]
 
-c.execute("""
-CREATE TABLE IF NOT EXISTS gewohnheit (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    name TEXT NOT NULL,
-    beschreibung TEXT
-)
-""")
-
-c.execute("""
-CREATE TABLE IF NOT EXISTS maßnahme (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    name TEXT NOT NULL,
-    beschreibung TEXT
-)
-""")
-
-
-
-habit_data = [
-    ("Früh aufstehen", "Jeden Morgen"),
-    ("Lesen", "Täglich 10 Minuten"),
-    ("Sport", "3× pro Woche")
-]
-
-maßnahmen_data = [
-    ("QR-Code Wecker", "QR-Code im Bad -> muss dahin laufen"),
-    ("Buch auf den Tisch legen", "immer wenn ich schlafen gehe, damit ich es am Morgen in die Schule nehme"),
-    ("Cooles Schweißband kaufen", "Schweißband kaufen und immer beim Sport tragen")]
-
-c.executemany("INSERT INTO gewohnheit (name, beschreibung) VALUES (?, ?)", habit_data)
-c.executemany("INSERT INTO maßnahme (name, beschreibung) VALUES (?, ?)", maßnahmen_data)
-
-conn.commit()
-conn.close()
+    for name, desc in habits:
+        try:
+            c.execute("INSERT INTO gewohnheit (name, beschreibung) VALUES (?, ?)", (name, desc))
+        except sqlite3.IntegrityError:
+            pass # Falls Name schon existiert, wird er übersprungen
+    
+    conn.commit()
+    conn.close()    
