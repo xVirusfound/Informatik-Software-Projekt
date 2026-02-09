@@ -100,7 +100,7 @@ class DetailAnsicht(QWidget):
 
         # LINKS: Maßnahmen Liste
         left_layout = QVBoxLayout()
-        left_layout.addWidget(QLabel("Maßnahmen (Abhaken):"))
+        left_layout.addWidget(QLabel("Zugehörige Maßnahmen:"))
         self.list_details = QListWidget()
         self.list_details.itemChanged.connect(self.on_measure_changed)
         left_layout.addWidget(self.list_details)
@@ -192,8 +192,6 @@ class DetailAnsicht(QWidget):
 class MainWindow(QWidget):
     def __init__(self):
         super().__init__()
-        setup_test_database() 
-        
         self.btn_gewohnheiten = QPushButton("Gewohnheiten")
         self.btn_maßnahmen = QPushButton("Alle Maßnahmen")
         

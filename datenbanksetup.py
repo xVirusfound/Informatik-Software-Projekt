@@ -6,7 +6,7 @@ def setup_test_database():
     
     # UNIQUE sorgt dafür, dass Namen nicht doppelt gespeichert werden
     c.execute("CREATE TABLE IF NOT EXISTS gewohnheit (id INTEGER PRIMARY KEY, name TEXT UNIQUE, beschreibung TEXT)")
-    c.execute("CREATE TABLE IF NOT EXISTS maßnahme (id INTEGER PRIMARY KEY, name TEXT, gewohnheit_id INTEGER, erledigt INTEGER DEFAULT 0)")
+    c.execute("CREATE TABLE IF NOT EXISTS maßnahme (id INTEGER PRIMARY KEY, name TEXT, gewohnheit_id INTEGER)")
     
     habits = [
         ('Sport machen', 'Jeden zweiten Tag trainieren.'),
@@ -15,11 +15,24 @@ def setup_test_database():
         ('Nicht Doom Scrollen', 'Kein TikTok vor dem Schlafen.')
     ]
 
+    maßnahmen = [
+        ('Sportmotivationsapp'),
+        ('Kaloriezählapp'),
+        ('QR-Code Wecker')
+    ]
+
+    inserted_ids = []
     for name, desc in habits:
         try:
             c.execute("INSERT INTO gewohnheit (name, beschreibung) VALUES (?, ?)", (name, desc))
+            inserted_ids.append(cursor.lastrowid)
         except sqlite3.IntegrityError:
             pass # Falls Name schon existiert, wird er übersprungen
     
+    for i in range(len(maßnahmen)):
+        try:
+            c.execute("INSERT INTO maßnahme (name, gewohnheit_id) VALUES (?, ?)", (maßnahmen[i], inserted_ids[i]))
+        except sqlite3.IntegrityError:
+            pass # Falls Name schon existiert, wird er übersprungen
     conn.commit()
     conn.close()    
