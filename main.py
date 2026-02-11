@@ -457,7 +457,9 @@ class DetailAnsicht(QWidget):
         
         self.calendar = QCalendarWidget()
         self.calendar.setGridVisible(True)
-        self.calendar.setMaximumSize(350, 250) 
+        self.calendar.setMaximumSize(350, 250)
+
+        self.calendar.clicked.connect(self.on_calendar_clicked)
         
         right_layout.addWidget(self.calendar, alignment=Qt.AlignTop)
         
@@ -605,6 +607,66 @@ class DetailAnsicht(QWidget):
             print("Fehler:", e)
         finally:
             conn.close()
+
+    def on_calendar_clicked(self, qdate: QDate):
+        if self.current_habit_id is None:
+            return
+        datum_iso = qdate.toString("yyyy-MM-dd")
+        current = get_habit_day(self.current_habit_id, datum_iso)  # None / 0 / 1
+
+        # Einfacher Dialog: Yes = gemacht, No = nicht gemacht, Cancel = nichts
+        msg = QMessageBox(self)
+        msg.setWindowTitle(qdate.toString("dd.MM.yyyy"))
+        msg.setText("Markiere diesen Tag für die Gewohnheit:")
+        btn_yes = msg.addButton("Gemacht", QMessageBox.YesRole)
+        btn_no = msg.addButton("Nicht gemacht", QMessageBox.NoRole)
+        btn_delete = msg.addButton("Eintrag löschen", QMessageBox.DestructiveRole)
+        msg.addButton("Abbrechen", QMessageBox.RejectRole)
+        msg.exec_()
+
+        clicked = msg.clickedButton()
+        if clicked == btn_yes:
+            set_habit_day(self.current_habit_id, datum_iso, 1)
+        elif clicked == btn_no:
+            set_habit_day(self.current_habit_id, datum_iso, 0)
+        elif clicked == btn_delete:
+            # delete entry
+            conn = get_conn()
+            c = conn.cursor()
+            c.execute("DELETE FROM gewohnheit_historie WHERE gewohnheit_id = ? AND datum = ?", (self.current_habit_id, datum_iso))
+            conn.commit()
+            conn.close()
+        else:
+            return
+
+        # Nach dem Setzen: Kalender neu formatieren
+        self.apply_history_to_calendar_for_current_month()
+
+    # Methode zum Laden/Färben:
+    def apply_history_to_calendar_for_current_month(self):
+        year = self.calendar.yearShown()
+        month = self.calendar.monthShown()
+        first = QDate(year, month, 1)
+        days = first.daysInMonth()
+        start_iso = QDate(year, month, 1).toString("yyyy-MM-dd")
+        end_iso = QDate(year, month, days).toString("yyyy-MM-dd")
+
+        rows = get_habit_history(self.current_habit_id, start_iso, end_iso)
+        # setze zuerst Default-Format (z.B. hellgrau)
+        base_fmt = QTextCharFormat()
+        base_fmt.setBackground(QColor("#eeeeee"))
+        for d in range(1, days + 1):
+            self.calendar.setDateTextFormat(QDate(year, month, d), base_fmt)
+
+        for datum_iso, status in rows:
+            y, m, d = map(int, datum_iso.split("-"))
+            date = QDate(y, m, d)
+            fmt = QTextCharFormat()
+            if status == 1:
+                fmt.setBackground(QColor("#4caf50"))   # grün = gemacht
+            else:
+                fmt.setBackground(QColor("#ff4d4d"))   # rot = nicht gemacht
+            self.calendar.setDateTextFormat(date, fmt)
 
 class WochenAnsicht(QWidget):
     def __init__(self):
@@ -774,6 +836,7 @@ class MainWindow(QWidget):
         self.stack.setCurrentWidget(self.view_wochen)
 
 if __name__ == "__main__":
+    setup_test_database()
     app = QApplication(sys.argv)
     window = MainWindow()
     window.show()

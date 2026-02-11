@@ -62,7 +62,6 @@ def setup_test_database():
             "INSERT INTO gewohnheit (name, beschreibung) VALUES (?, ?)",
             habits
         )
-
-conn.commit()
-conn.close()
+    conn.commit()
+    conn.close()
 
