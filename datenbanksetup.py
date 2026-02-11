@@ -13,6 +13,7 @@ def setup_test_database():
     conn = get_conn()
     c = conn.cursor()
 
+    #erzeugt gewohnheitentabelle
     c.execute("""
         CREATE TABLE IF NOT EXISTS gewohnheit (
             id INTEGER PRIMARY KEY,
@@ -20,7 +21,7 @@ def setup_test_database():
             beschreibung TEXT
         )
     """)
-
+    #erzeugt maßnahmentabelle
     c.execute("""
         CREATE TABLE IF NOT EXISTS maßnahme (
             id INTEGER PRIMARY KEY,
@@ -30,9 +31,25 @@ def setup_test_database():
         )
     """)
 
-    # Defaults nur einfügen, wenn Tabelle leer ist
-    c.execute("SELECT COUNT(*) FROM gewohnheit")
-    count = c.fetchone()[0]
+    # erzeugt tabele für historische einträge
+    c.execute("""
+        CREATE TABLE IF NOT EXISTS gewohnheit_historie (
+            id INTEGER PRIMARY KEY,
+            gewohnheit_id INTEGER NOT NULL,
+            datum TEXT NOT NULL,
+            status INTEGER NOT NULL CHECK (status IN (0,1)),
+            created_at TEXT DEFAULT (datetime('now')),
+            updated_at TEXT,
+            UNIQUE(gewohnheit_id, datum),
+            FOREIGN KEY (gewohnheit_id) REFERENCES gewohnheit(id) ON DELETE CASCADE
+        )
+    """)
+
+c.execute("CREATE INDEX IF NOT EXISTS idx_gew_hist_gew_datum ON gewohnheit_historie(gewohnheit_id, datum)")
+
+# Defaults nur einfügen, wenn Tabelle leer ist
+c.execute("SELECT COUNT(*) FROM gewohnheit")
+count = c.fetchone()[0]
 
     if count == 0:
         habits = [

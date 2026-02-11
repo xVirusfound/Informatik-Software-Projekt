@@ -11,6 +11,45 @@ from PyQt5.QtWidgets import (
 from PyQt5.QtCore import Qt, pyqtSignal, QDate
 from PyQt5.QtGui import QFont, QTextCharFormat, QColor
 from datenbanksetup import setup_test_database, get_conn
+from typing import List, Tuple
+# -------------------------
+# Globale Funktionen
+# -------------------------
+def set_habit_day(gewohnheit_id: int, datum_iso: str, status: int):
+    """Setzt oder aktualisiert den Eintrag für (habit, date). datum_iso = 'YYYY-MM-DD'"""
+    conn = get_conn()
+    c = conn.cursor()
+    c.execute("""
+        INSERT INTO gewohnheit_historie (gewohnheit_id, datum, status, created_at, updated_at)
+        VALUES (?, ?, ?, datetime('now'), datetime('now'))
+        ON CONFLICT(gewohnheit_id, datum) DO UPDATE
+          SET status = excluded.status,
+              updated_at = datetime('now')
+    """, (gewohnheit_id, datum_iso, int(status)))
+    conn.commit()
+    conn.close()
+
+def get_habit_day(gewohnheit_id: int, datum_iso: str) -> int | None:
+    """Gibt 0/1 zurück oder None wenn kein Eintrag existiert."""
+    conn = get_conn()
+    c = conn.cursor()
+    c.execute("SELECT status FROM gewohnheit_historie WHERE gewohnheit_id = ? AND datum = ?", (gewohnheit_id, datum_iso))
+    row = c.fetchone()
+    conn.close()
+    return row[0] if row else None
+
+def get_habit_history(gewohnheit_id: int, start_iso: str, end_iso: str) -> List[Tuple[str,int]]:
+    """Gibt Liste (datum_iso, status) ORDER BY datum zurück."""
+    conn = get_conn()
+    c = conn.cursor()
+    c.execute("""
+        SELECT datum, status FROM gewohnheit_historie
+        WHERE gewohnheit_id = ? AND datum BETWEEN ? AND ?
+        ORDER BY datum
+    """, (gewohnheit_id, start_iso, end_iso))
+    rows = c.fetchall()
+    conn.close()
+    return rows
 # -------------------------
 # SCORE-LOGIK (vorerst Dummy)
 # -------------------------
@@ -153,7 +192,9 @@ class TagesDialog(QDialog):
         layout.addWidget(list_not)
 
 
-# --- Ansichten ---
+# -------------------------
+# Ansichten
+# -------------------------
 
 class GewohnheitenAnsicht(QWidget):
     habit_clicked = pyqtSignal(int)  # ID statt Name
@@ -659,9 +700,9 @@ class WochenAnsicht(QWidget):
             fmt = QTextCharFormat()
             fmt.setBackground(QColor(score_to_color(score)))
             self.calendar.setDateTextFormat(date, fmt)
-
-
-# --- Main Window ---
+# -------------------------
+# Main Window
+# -------------------------
 
 class MainWindow(QWidget):
     def __init__(self):
@@ -731,8 +772,6 @@ class MainWindow(QWidget):
     def show_wochenanzeige(self):
         self.view_wochen.refresh()  # falls du später neu berechnen willst
         self.stack.setCurrentWidget(self.view_wochen)
-
-
 
 if __name__ == "__main__":
     app = QApplication(sys.argv)
