@@ -45,11 +45,11 @@ def setup_test_database():
         )
     """)
 
-c.execute("CREATE INDEX IF NOT EXISTS idx_gew_hist_gew_datum ON gewohnheit_historie(gewohnheit_id, datum)")
+    c.execute("CREATE INDEX IF NOT EXISTS idx_gew_hist_gew_datum ON gewohnheit_historie(gewohnheit_id, datum)")
 
-# Defaults nur einfügen, wenn Tabelle leer ist
-c.execute("SELECT COUNT(*) FROM gewohnheit")
-count = c.fetchone()[0]
+    # Defaults nur einfügen, wenn Tabelle leer ist
+    c.execute("SELECT COUNT(*) FROM gewohnheit")
+    count = c.fetchone()[0]
 
     if count == 0:
         habits = [
@@ -63,6 +63,6 @@ count = c.fetchone()[0]
             habits
         )
 
-    conn.commit()
-    conn.close()
+conn.commit()
+conn.close()
 
