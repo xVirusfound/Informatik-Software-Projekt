@@ -11,8 +11,49 @@ from PyQt5.QtWidgets import (
 from PyQt5.QtCore import Qt, pyqtSignal, QDate
 from PyQt5.QtGui import QFont, QTextCharFormat, QColor
 from datenbanksetup import setup_test_database, get_conn
+from typing import List, Tuple
+# -------------------------
+# Globale Funktionen
+# -------------------------
+def set_habit_day(gewohnheit_id: int, datum_iso: str, status: int):
+    """Setzt oder aktualisiert den Eintrag für (habit, date). datum_iso = 'YYYY-MM-DD'"""
+    conn = get_conn()
+    c = conn.cursor()
+    c.execute("""
+        INSERT INTO gewohnheit_historie (gewohnheit_id, datum, status, created_at, updated_at)
+        VALUES (?, ?, ?, datetime('now'), datetime('now'))
+        ON CONFLICT(gewohnheit_id, datum) DO UPDATE
+          SET status = excluded.status,
+              updated_at = datetime('now')
+    """, (gewohnheit_id, datum_iso, int(status)))
+    conn.commit()
+    conn.close()
 
-# --- Ansichten ---
+def get_habit_day(gewohnheit_id: int, datum_iso: str) -> int | None:
+    """Gibt 0/1 zurück oder None wenn kein Eintrag existiert."""
+    conn = get_conn()
+    c = conn.cursor()
+    c.execute("SELECT status FROM gewohnheit_historie WHERE gewohnheit_id = ? AND datum = ?", (gewohnheit_id, datum_iso))
+    row = c.fetchone()
+    conn.close()
+    return row[0] if row else None
+
+def get_habit_history(gewohnheit_id: int, start_iso: str, end_iso: str) -> List[Tuple[str,int]]:
+    """Gibt Liste (datum_iso, status) ORDER BY datum zurück."""
+    conn = get_conn()
+    c = conn.cursor()
+    c.execute("""
+        SELECT datum, status FROM gewohnheit_historie
+        WHERE gewohnheit_id = ? AND datum BETWEEN ? AND ?
+        ORDER BY datum
+    """, (gewohnheit_id, start_iso, end_iso))
+    rows = c.fetchall()
+    conn.close()
+    return rows
+
+# -------------------------
+# Ansichten
+# -------------------------
 
 class GewohnheitenAnsicht(QWidget):
     habit_clicked = pyqtSignal(int)  # ID statt Name
@@ -258,7 +299,7 @@ class DetailAnsicht(QWidget):
 
         # LINKS: Maßnahmen Liste
         left_layout = QVBoxLayout()
-        left_layout.addWidget(QLabel("Maßnahmen (Abhaken):"))
+        left_layout.addWidget(QLabel("Zugehörige Maßnahmen:"))
         self.list_details = QListWidget()
         
         # Rechtsklick-Menü für Maßnahmen in der Detailansicht
@@ -275,7 +316,9 @@ class DetailAnsicht(QWidget):
         
         self.calendar = QCalendarWidget()
         self.calendar.setGridVisible(True)
-        self.calendar.setMaximumSize(350, 250) 
+        self.calendar.setMaximumSize(350, 250)
+
+        self.calendar.clicked.connect(self.on_calendar_clicked)
         
         right_layout.addWidget(self.calendar, alignment=Qt.AlignTop)
         
@@ -425,13 +468,167 @@ class DetailAnsicht(QWidget):
             conn.close()
 
 
-# --- Main Window ---
+    def on_calendar_clicked(self, qdate: QDate):
+        if self.current_habit_id is None:
+            return
+        datum_iso = qdate.toString("yyyy-MM-dd")
+        current = get_habit_day(self.current_habit_id, datum_iso)  # None / 0 / 1
+
+        # Einfacher Dialog: Yes = gemacht, No = nicht gemacht, Cancel = nichts
+        msg = QMessageBox(self)
+        msg.setWindowTitle(qdate.toString("dd.MM.yyyy"))
+        msg.setText("Markiere diesen Tag für die Gewohnheit:")
+        btn_yes = msg.addButton("Gemacht", QMessageBox.YesRole)
+        btn_no = msg.addButton("Nicht gemacht", QMessageBox.NoRole)
+        btn_delete = msg.addButton("Eintrag löschen", QMessageBox.DestructiveRole)
+        msg.addButton("Abbrechen", QMessageBox.RejectRole)
+        msg.exec_()
+
+        clicked = msg.clickedButton()
+        if clicked == btn_yes:
+            set_habit_day(self.current_habit_id, datum_iso, 1)
+        elif clicked == btn_no:
+            set_habit_day(self.current_habit_id, datum_iso, 0)
+        elif clicked == btn_delete:
+            # delete entry
+            conn = get_conn()
+            c = conn.cursor()
+            c.execute("DELETE FROM gewohnheit_historie WHERE gewohnheit_id = ? AND datum = ?", (self.current_habit_id, datum_iso))
+            conn.commit()
+            conn.close()
+        else:
+            return
+
+        # Nach dem Setzen: Kalender neu formatieren
+        self.apply_history_to_calendar_for_current_month()
+
+    # Methode zum Laden/Färben:
+    def apply_history_to_calendar_for_current_month(self):
+        year = self.calendar.yearShown()
+        month = self.calendar.monthShown()
+        first = QDate(year, month, 1)
+        days = first.daysInMonth()
+        start_iso = QDate(year, month, 1).toString("yyyy-MM-dd")
+        end_iso = QDate(year, month, days).toString("yyyy-MM-dd")
+
+        rows = get_habit_history(self.current_habit_id, start_iso, end_iso)
+        # setze zuerst Default-Format (z.B. hellgrau)
+        base_fmt = QTextCharFormat()
+        base_fmt.setBackground(QColor("#eeeeee"))
+        for d in range(1, days + 1):
+            self.calendar.setDateTextFormat(QDate(year, month, d), base_fmt)
+
+        for datum_iso, status in rows:
+            y, m, d = map(int, datum_iso.split("-"))
+            date = QDate(y, m, d)
+            fmt = QTextCharFormat()
+            if status == 1:
+                fmt.setBackground(QColor("#4caf50"))   # grün = gemacht
+            else:
+                fmt.setBackground(QColor("#ff4d4d"))   # rot = nicht gemacht
+            self.calendar.setDateTextFormat(date, fmt)
+
+class WochenAnsicht(QWidget):
+    def __init__(self):
+        super().__init__()
+
+        root = QVBoxLayout(self)
+
+        # ---------- TOP: Score (links) + Review/Buttons (rechts) ----------
+        top = QHBoxLayout()
+
+        # links: Score
+        left = QVBoxLayout()
+        lbl = QLabel("Dein Wochenscore:")
+        f = QFont(); f.setBold(True); f.setPointSize(12)
+        lbl.setFont(f)
+        left.addWidget(lbl)
+
+        self.week_circle = ScoreCircle(score=weakly_score_berechnen(), size=130)
+        left.addWidget(self.week_circle, alignment=Qt.AlignLeft)
+        left.addStretch()
+
+        # rechts: Review + Buttons
+        right = QVBoxLayout()
+        review = QLabel("Review:")
+        review.setFont(f)
+        right.addWidget(review)
+
+        self.btn_stats = QPushButton("Statistiken")
+        self.btn_stats.clicked.connect(self.open_stats)
+        right.addWidget(self.btn_stats)
+
+        self.btn_improve = QPushButton("Was man noch besser machen kann")
+        self.btn_improve.clicked.connect(self.open_improve)
+        right.addWidget(self.btn_improve)
+
+        right.addStretch()
+
+        top.addLayout(left, 1)
+        top.addLayout(right, 2)
+
+        root.addLayout(top)
+        root.addSpacing(10)
+
+        # ---------- BOTTOM: Kalender volle Breite ----------
+        root.addWidget(QLabel("Kalender:"))
+        self.calendar = QCalendarWidget()
+        self.calendar.setGridVisible(True)
+        root.addWidget(self.calendar, 1)
+
+        self.calendar.clicked.connect(self.open_day_dialog)
+        self.calendar.currentPageChanged.connect(self.apply_calendar_formats)
+
+        self.apply_calendar_formats()
+
+    def open_stats(self):
+        dlg = StatistikDialog(self)
+        dlg.exec_()
+
+    def open_improve(self):
+        dlg = ImproveDialog(self)
+        dlg.exec_()
+
+    def open_day_dialog(self, date: QDate):
+        dlg = TagesDialog(date, self)
+        dlg.exec_()
+
+    def refresh(self):
+        self.week_circle.set_score(weakly_score_berechnen())
+        self.apply_calendar_formats()
+
+    def apply_calendar_formats(self, year=None, month=None):
+        """Setzt alle Tage im sichtbaren Monat auf hellgrau,
+        und überschreibt Tage mit Score farbig."""
+        if year is None or month is None:
+            year = self.calendar.yearShown()
+            month = self.calendar.monthShown()
+
+        # 1) Default: hellgrau für alle Tage im Monat
+        base_fmt = QTextCharFormat()
+        base_fmt.setBackground(QColor("#eeeeee"))  # hellgrau
+
+        first = QDate(year, month, 1)
+        days = first.daysInMonth()
+        for d in range(1, days + 1):
+            self.calendar.setDateTextFormat(QDate(year, month, d), base_fmt)
+
+        # 2) Score-Tage farbig
+        for d in range(1, days + 1):
+            date = QDate(year, month, d)
+            score = tages_score_berechnen(date)
+            if score is None:
+                continue
+            fmt = QTextCharFormat()
+            fmt.setBackground(QColor(score_to_color(score)))
+            self.calendar.setDateTextFormat(date, fmt)
+# -------------------------
+# Main Window
+# -------------------------
 
 class MainWindow(QWidget):
     def __init__(self):
         super().__init__()
-        setup_test_database() 
-        
         self.btn_gewohnheiten = QPushButton("Gewohnheiten")
         self.btn_maßnahmen = QPushButton("Alle Maßnahmen")
         self.btn_wochenanzeige = QPushButton("Wochenanzeige")
@@ -497,9 +694,8 @@ class MainWindow(QWidget):
         self.view_wochen.refresh()  # falls du später neu berechnen willst
         self.stack.setCurrentWidget(self.view_wochen)
 
-
-
 if __name__ == "__main__":
+    setup_test_database()
     app = QApplication(sys.argv)
     window = MainWindow()
     window.show()
