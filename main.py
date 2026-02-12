@@ -11,7 +11,6 @@ from PyQt5.QtWidgets import (
 from PyQt5.QtCore import Qt, pyqtSignal, QDate
 from PyQt5.QtGui import QFont, QTextCharFormat, QColor
 from datenbanksetup import setup_test_database, get_conn
-<<<<<<< HEAD
 from typing import List, Tuple
 # -------------------------
 # Globale Funktionen
