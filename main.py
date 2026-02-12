@@ -11,147 +11,6 @@ from PyQt5.QtWidgets import (
 from PyQt5.QtCore import Qt, pyqtSignal, QDate
 from PyQt5.QtGui import QFont, QTextCharFormat, QColor
 from datenbanksetup import setup_test_database, get_conn
-# -------------------------
-# SCORE-LOGIK (vorerst Dummy)
-# -------------------------
-
-def weakly_score_berechnen() -> int:
-    # TODO: später echte Berechnung
-    return 67
-
-# Demo-Daten für Tages-Scores (damit du Farben siehst)
-_DEMO_DAY_SCORES = {
-    QDate.currentDate().addDays(-0): 72,
-    QDate.currentDate().addDays(-1): 58,
-    QDate.currentDate().addDays(-2): 33,
-    QDate.currentDate().addDays(-3): 12,
-    QDate.currentDate().addDays(-4): 85,
-}
-
-def tages_score_berechnen(date: QDate):
-    # TODO: später echte Berechnung
-    # None bedeutet: kein Tages-Score -> Kalender bleibt hellgrau
-    return _DEMO_DAY_SCORES.get(date, None)
-
-def score_to_color(score: int) -> str:
-    # Farben nach deinen Bereichen
-    if 1 <= score <= 20:
-        return "#ff4d4d"   # rot
-    if 21 <= score <= 40:
-        return "#ffa500"   # orange
-    if 41 <= score <= 60:
-        return "#ffd84d"   # gelb
-    if 61 <= score <= 80:
-        return "#4caf50"   # grün
-    if 81 <= score <= 99:
-        return "#006400"   # dunkelgrün
-    return "#d9d9d9"       # fallback hellgrau
-
-
-class ScoreCircle(QWidget):
-    """Kleiner Kreis mit Zahl drin + Hintergrundfarbe je nach Score."""
-    def __init__(self, score: int = 67, size: int = 120, parent=None):
-        super().__init__(parent)
-        self._size = size
-
-        self.label = QLabel("", self)
-        self.label.setAlignment(Qt.AlignCenter)
-
-        font = QFont()
-        font.setBold(True)
-        font.setPointSize(18)
-        self.label.setFont(font)
-
-        layout = QVBoxLayout(self)
-        layout.setContentsMargins(0, 0, 0, 0)
-        layout.addWidget(self.label)
-
-        self.setFixedSize(size, size)
-        self.set_score(score)
-
-    def set_score(self, score: int):
-        self.label.setText(str(score))
-        color = score_to_color(score)
-        radius = self._size // 2
-        self.setStyleSheet(
-            f"background-color: {color}; border-radius: {radius}px;"
-        )
-class StatistikDialog(QDialog):
-    def __init__(self, parent=None):
-        super().__init__(parent)
-        self.setWindowTitle("Statistiken")
-        self.resize(500, 300)
-
-        layout = QVBoxLayout(self)
-        title = QLabel("Statistik:")
-        font = QFont()
-        font.setBold(True)
-        font.setPointSize(12)
-        title.setFont(font)
-
-        layout.addWidget(title)
-        layout.addWidget(QLabel("noch in Arbeit …"))
-        
-class ImproveDialog(QDialog):
-    def __init__(self, parent=None):
-        super().__init__(parent)
-        self.setWindowTitle("Was man noch besser machen kann")
-        self.resize(500, 300)
-
-        layout = QVBoxLayout(self)
-        label = QLabel("noch in Arbeit...")
-        font = QFont(); font.setBold(True); font.setPointSize(12)
-        label.setFont(font)
-
-        layout.addWidget(label)
-
-
-class TagesDialog(QDialog):
-    def __init__(self, date: QDate, parent=None):
-        super().__init__(parent)
-        self.setWindowTitle(date.toString("dd.MM.yyyy"))
-        self.resize(550, 450)
-
-        layout = QVBoxLayout(self)
-
-        # Überschrift
-        title = QLabel("Dein Tagesscore:")
-        font = QFont()
-        font.setBold(True)
-        font.setPointSize(12)
-        title.setFont(font)
-        layout.addWidget(title)
-
-        score = tages_score_berechnen(date)
-        if score is None:
-            # falls kein score vorhanden
-            score = 67  # Dummy, solange in Arbeit
-            hint = QLabel("(Tages-Score: noch in Arbeit – aktuell Dummy-Wert)")
-            hint.setStyleSheet("color: gray;")
-            layout.addWidget(hint)
-
-        circle = ScoreCircle(score=score, size=110)
-        layout.addWidget(circle, alignment=Qt.AlignLeft)
-
-        # Listen: später befüllen
-        layout.addSpacing(10)
-
-        lbl_done = QLabel("Wurde erledigt:")
-        lbl_done.setFont(font)
-        layout.addWidget(lbl_done)
-
-        list_done = QListWidget()
-        list_done.addItem("— noch in Arbeit —")
-        layout.addWidget(list_done)
-
-        lbl_not = QLabel("Wurde nicht erledigt:")
-        lbl_not.setFont(font)
-        layout.addWidget(lbl_not)
-
-        list_not = QListWidget()
-        list_not.addItem("— noch in Arbeit —")
-        layout.addWidget(list_not)
-
 
 # --- Ansichten ---
 
@@ -565,101 +424,6 @@ class DetailAnsicht(QWidget):
         finally:
             conn.close()
 
-class WochenAnsicht(QWidget):
-    def __init__(self):
-        super().__init__()
-
-        root = QVBoxLayout(self)
-
-        # ---------- TOP: Score (links) + Review/Buttons (rechts) ----------
-        top = QHBoxLayout()
-
-        # links: Score
-        left = QVBoxLayout()
-        lbl = QLabel("Dein Wochenscore:")
-        f = QFont(); f.setBold(True); f.setPointSize(12)
-        lbl.setFont(f)
-        left.addWidget(lbl)
-
-        self.week_circle = ScoreCircle(score=weakly_score_berechnen(), size=130)
-        left.addWidget(self.week_circle, alignment=Qt.AlignLeft)
-        left.addStretch()
-
-        # rechts: Review + Buttons
-        right = QVBoxLayout()
-        review = QLabel("Review:")
-        review.setFont(f)
-        right.addWidget(review)
-
-        self.btn_stats = QPushButton("Statistiken")
-        self.btn_stats.clicked.connect(self.open_stats)
-        right.addWidget(self.btn_stats)
-
-        self.btn_improve = QPushButton("Was man noch besser machen kann")
-        self.btn_improve.clicked.connect(self.open_improve)
-        right.addWidget(self.btn_improve)
-
-        right.addStretch()
-
-        top.addLayout(left, 1)
-        top.addLayout(right, 2)
-
-        root.addLayout(top)
-        root.addSpacing(10)
-
-        # ---------- BOTTOM: Kalender volle Breite ----------
-        root.addWidget(QLabel("Kalender:"))
-        self.calendar = QCalendarWidget()
-        self.calendar.setGridVisible(True)
-        root.addWidget(self.calendar, 1)
-
-        self.calendar.clicked.connect(self.open_day_dialog)
-        self.calendar.currentPageChanged.connect(self.apply_calendar_formats)
-
-        self.apply_calendar_formats()
-
-    def open_stats(self):
-        dlg = StatistikDialog(self)
-        dlg.exec_()
-
-    def open_improve(self):
-        dlg = ImproveDialog(self)
-        dlg.exec_()
-
-    def open_day_dialog(self, date: QDate):
-        dlg = TagesDialog(date, self)
-        dlg.exec_()
-
-    def refresh(self):
-        self.week_circle.set_score(weakly_score_berechnen())
-        self.apply_calendar_formats()
-
-    def apply_calendar_formats(self, year=None, month=None):
-        """Setzt alle Tage im sichtbaren Monat auf hellgrau,
-        und überschreibt Tage mit Score farbig."""
-        if year is None or month is None:
-            year = self.calendar.yearShown()
-            month = self.calendar.monthShown()
-
-        # 1) Default: hellgrau für alle Tage im Monat
-        base_fmt = QTextCharFormat()
-        base_fmt.setBackground(QColor("#eeeeee"))  # hellgrau
-
-        first = QDate(year, month, 1)
-        days = first.daysInMonth()
-        for d in range(1, days + 1):
-            self.calendar.setDateTextFormat(QDate(year, month, d), base_fmt)
-
-        # 2) Score-Tage farbig
-        for d in range(1, days + 1):
-            date = QDate(year, month, d)
-            score = tages_score_berechnen(date)
-            if score is None:
-                continue
-            fmt = QTextCharFormat()
-            fmt.setBackground(QColor(score_to_color(score)))
-            self.calendar.setDateTextFormat(date, fmt)
-
 
 # --- Main Window ---
 
@@ -685,19 +449,18 @@ class MainWindow(QWidget):
         self.view_gewohnheiten = GewohnheitenAnsicht()
         self.view_maßnahmen = MaßnahmenAnsicht()
         self.view_detail = DetailAnsicht()
-        self.view_wochen = WochenAnsicht()
+
         
         self.stack.addWidget(self.view_gewohnheiten)
         self.stack.addWidget(self.view_maßnahmen)
         self.stack.addWidget(self.view_detail)
-        self.stack.addWidget(self.view_wochen)
+
 
 
         sidebar_layout = QVBoxLayout()
         
         sidebar_layout.addWidget(self.btn_gewohnheiten)
         sidebar_layout.addWidget(self.btn_maßnahmen)
-        sidebar_layout.addWidget(self.btn_wochenanzeige)
         sidebar_layout.addStretch()
 
         main_layout = QHBoxLayout(self)
@@ -707,7 +470,7 @@ class MainWindow(QWidget):
     def connect_signals(self):
         self.btn_gewohnheiten.clicked.connect(lambda: self.stack.setCurrentWidget(self.view_gewohnheiten))
         self.btn_maßnahmen.clicked.connect(lambda: self.stack.setCurrentWidget(self.view_maßnahmen))
-        self.btn_wochenanzeige.clicked.connect(self.show_wochenanzeige)
+
         
         self.view_gewohnheiten.habit_clicked.connect(self.open_detail_view)
         self.view_detail.back_clicked.connect(self.go_back_to_list)
