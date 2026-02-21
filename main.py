@@ -1,4 +1,5 @@
 import sys
+import os
 import sqlite3
 from PyQt5.QtWidgets import (
     QApplication, QWidget, QPushButton, QLabel,
@@ -15,6 +16,12 @@ from typing import List, Tuple
 # -------------------------
 # Globale Funktionen
 # -------------------------
+DB_PATH = os.path.join(os.path.dirname(__file__), "datenbank.db")
+def get_conn():
+    conn = sqlite3.connect(DB_PATH)
+    conn.execute("PRAGMA foreign_keys = ON")
+    return conn
+
 def set_habit_day(gewohnheit_id: int, datum_iso: str, status: int):
     """Setzt oder aktualisiert den Eintrag für (habit, date). datum_iso = 'YYYY-MM-DD'"""
     conn = get_conn()
@@ -259,8 +266,9 @@ class DetailAnsicht(QWidget):
 
     def __init__(self):
         super().__init__()
-        self.current_habit_id = None
-        
+        self.current_habit_id = 1
+        self.score = 0
+        self.status = "wip"
         layout = QVBoxLayout(self)
 
         # --- 1. Header ---
@@ -312,6 +320,13 @@ class DetailAnsicht(QWidget):
 
         # RECHTS: Kalender
         right_layout = QVBoxLayout()
+
+        self.scorelabel = QLabel(f"Score: {self.score}%")
+        right_layout.addWidget(self.scorelabel)
+
+        self.statuslabel = QLabel(f"Score: {self.status}")
+        right_layout.addWidget(self.statuslabel)
+
         right_layout.addWidget(QLabel("Kalender:"))
         
         self.calendar = QCalendarWidget()
@@ -325,7 +340,40 @@ class DetailAnsicht(QWidget):
         content_layout.addLayout(right_layout, stretch=1)
 
         layout.addLayout(content_layout)
-        
+
+    def update_score(self):
+        conn = get_conn()
+        c = conn.cursor()
+        c.execute("""
+            SELECT score
+            FROM gewohnheit
+            WHERE id = ?
+            """,(self.current_habit_id,))
+        self.score = c.fetchone()[0]
+        self.scorelabel.setText(f"Score: {self.score}%")
+        conn.commit()
+        conn.close()
+
+    def update_status(self):
+        conn=get_conn()
+        c = conn.cursor()
+        if self.score >= 80:
+            c.execute("""
+                UPDATE gewohnheit
+                SET status = "umgesetzt"
+                WHERE id = ?
+                """, (self.current_habit_id,))
+        elif self.score <= 80:
+            c.execute("""
+                UPDATE gewohnheit
+                SET status = "wip"
+                WHERE id = ?
+                """, (self.current_habit_id,))
+        self.status = c.execute("SELECT status FROM gewohnheit WHERE id = ?", (self.current_habit_id,)).fetchone()[0]
+        print(self.status)
+        conn.commit()
+        conn.close()
+        self.statuslabel.setText(f"Score: {self.status}")
     def set_habit(self, habit_id: int):
         self.current_habit_id = habit_id
         self.lade_daten()
@@ -527,101 +575,6 @@ class DetailAnsicht(QWidget):
             else:
                 fmt.setBackground(QColor("#ff4d4d"))   # rot = nicht gemacht
             self.calendar.setDateTextFormat(date, fmt)
-
-class WochenAnsicht(QWidget):
-    def __init__(self):
-        super().__init__()
-
-        root = QVBoxLayout(self)
-
-        # ---------- TOP: Score (links) + Review/Buttons (rechts) ----------
-        top = QHBoxLayout()
-
-        # links: Score
-        left = QVBoxLayout()
-        lbl = QLabel("Dein Wochenscore:")
-        f = QFont(); f.setBold(True); f.setPointSize(12)
-        lbl.setFont(f)
-        left.addWidget(lbl)
-
-        self.week_circle = ScoreCircle(score=weakly_score_berechnen(), size=130)
-        left.addWidget(self.week_circle, alignment=Qt.AlignLeft)
-        left.addStretch()
-
-        # rechts: Review + Buttons
-        right = QVBoxLayout()
-        review = QLabel("Review:")
-        review.setFont(f)
-        right.addWidget(review)
-
-        self.btn_stats = QPushButton("Statistiken")
-        self.btn_stats.clicked.connect(self.open_stats)
-        right.addWidget(self.btn_stats)
-
-        self.btn_improve = QPushButton("Was man noch besser machen kann")
-        self.btn_improve.clicked.connect(self.open_improve)
-        right.addWidget(self.btn_improve)
-
-        right.addStretch()
-
-        top.addLayout(left, 1)
-        top.addLayout(right, 2)
-
-        root.addLayout(top)
-        root.addSpacing(10)
-
-        # ---------- BOTTOM: Kalender volle Breite ----------
-        root.addWidget(QLabel("Kalender:"))
-        self.calendar = QCalendarWidget()
-        self.calendar.setGridVisible(True)
-        root.addWidget(self.calendar, 1)
-
-        self.calendar.clicked.connect(self.open_day_dialog)
-        self.calendar.currentPageChanged.connect(self.apply_calendar_formats)
-
-        self.apply_calendar_formats()
-
-    def open_stats(self):
-        dlg = StatistikDialog(self)
-        dlg.exec_()
-
-    def open_improve(self):
-        dlg = ImproveDialog(self)
-        dlg.exec_()
-
-    def open_day_dialog(self, date: QDate):
-        dlg = TagesDialog(date, self)
-        dlg.exec_()
-
-    def refresh(self):
-        self.week_circle.set_score(weakly_score_berechnen())
-        self.apply_calendar_formats()
-
-    def apply_calendar_formats(self, year=None, month=None):
-        """Setzt alle Tage im sichtbaren Monat auf hellgrau,
-        und überschreibt Tage mit Score farbig."""
-        if year is None or month is None:
-            year = self.calendar.yearShown()
-            month = self.calendar.monthShown()
-
-        # 1) Default: hellgrau für alle Tage im Monat
-        base_fmt = QTextCharFormat()
-        base_fmt.setBackground(QColor("#eeeeee"))  # hellgrau
-
-        first = QDate(year, month, 1)
-        days = first.daysInMonth()
-        for d in range(1, days + 1):
-            self.calendar.setDateTextFormat(QDate(year, month, d), base_fmt)
-
-        # 2) Score-Tage farbig
-        for d in range(1, days + 1):
-            date = QDate(year, month, d)
-            score = tages_score_berechnen(date)
-            if score is None:
-                continue
-            fmt = QTextCharFormat()
-            fmt.setBackground(QColor(score_to_color(score)))
-            self.calendar.setDateTextFormat(date, fmt)
 # -------------------------
 # Main Window
 # -------------------------
@@ -631,7 +584,6 @@ class MainWindow(QWidget):
         super().__init__()
         self.btn_gewohnheiten = QPushButton("Gewohnheiten")
         self.btn_maßnahmen = QPushButton("Alle Maßnahmen")
-        self.btn_wochenanzeige = QPushButton("Wochenanzeige")
 
         
         self.init_ui()
@@ -672,12 +624,30 @@ class MainWindow(QWidget):
         self.view_gewohnheiten.habit_clicked.connect(self.open_detail_view)
         self.view_detail.back_clicked.connect(self.go_back_to_list)
 
+    def calculate_score(self,habit_id):
+        conn = get_conn()
+        c = conn.cursor()
+        rows = c.execute("""
+            SELECT status
+            FROM gewohnheit_historie
+            WHERE gewohnheit_id = ?;
+            """, (habit_id,)).fetchall()
+        werte = [row[0] for row in rows]
+        score = int(sum(werte)/(len(werte)+1)*100) #TODO: Division durch 0 cleaner fixen
+        c.execute("""
+            UPDATE gewohnheit
+            SET score = ?
+            """, (score,))
+        conn.commit()
+        conn.close()
     def open_detail_view(self, habit_id):
         self.view_detail.set_habit(habit_id)
         self.stack.setCurrentWidget(self.view_detail)
         self.view_detail.apply_history_to_calendar_for_current_month()
-
-
+        self.calculate_score(habit_id)
+        self.view_detail.update_score()
+        self.view_detail.update_status()
+        print(self.view_detail.score)
 
     def go_back_to_list(self):
         self.stack.setCurrentWidget(self.view_gewohnheiten)
@@ -690,10 +660,6 @@ class MainWindow(QWidget):
 
         # Gesamtmaßnahmen-Ansicht aktualisieren (weil Maßnahmen mitgelöscht wurden)
         self.view_maßnahmen.lade_maßnahmen()
-        
-    def show_wochenanzeige(self):
-        self.view_wochen.refresh()  # falls du später neu berechnen willst
-        self.stack.setCurrentWidget(self.view_wochen)
 
 if __name__ == "__main__":
     setup_test_database()
