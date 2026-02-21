@@ -675,6 +675,7 @@ class MainWindow(QWidget):
     def open_detail_view(self, habit_id):
         self.view_detail.set_habit(habit_id)
         self.stack.setCurrentWidget(self.view_detail)
+        self.view_detail.apply_history_to_calendar_for_current_month()
 
 
 
