@@ -956,74 +956,6 @@ class DetailAnsicht(QWidget):
         conn.commit()
         conn.close()
 
-class WochenAnsicht(QWidget):
-    def __init__(self):
-        super().__init__()
-        root = QVBoxLayout(self)
-        top = QHBoxLayout()
-        left = QVBoxLayout()
-        lbl = QLabel("Dein Wochenscore:")
-        f = QFont(); f.setBold(True); f.setPointSize(12)
-        lbl.setFont(f)
-        left.addWidget(lbl)
-        self.week_circle = ScoreCircle(score=weakly_score_berechnen(), size=130)
-        left.addWidget(self.week_circle, alignment=Qt.AlignLeft)
-        left.addStretch()
-
-        right = QVBoxLayout()
-        review = QLabel("Review:")
-        review.setFont(f)
-        right.addWidget(review)
-        self.btn_stats = QPushButton("Statistiken")
-        self.btn_stats.clicked.connect(self.open_stats)
-        right.addWidget(self.btn_stats)
-        self.btn_improve = QPushButton("Was man noch besser machen kann")
-        self.btn_improve.clicked.connect(self.open_improve)
-        right.addWidget(self.btn_improve)
-        right.addStretch()
-
-        top.addLayout(left, 1)
-        top.addLayout(right, 2)
-        root.addLayout(top)
-        root.addSpacing(10)
-
-        root.addWidget(QLabel("Kalender:"))
-        self.calendar = QCalendarWidget()
-        self.calendar.setGridVisible(True)
-        root.addWidget(self.calendar, 1)
-        self.calendar.clicked.connect(self.open_day_dialog)
-        self.calendar.currentPageChanged.connect(self.apply_calendar_formats)
-        self.apply_calendar_formats()
-
-    def open_stats(self):
-        dlg = StatistikDialog(self)
-        dlg.exec_()
-    def open_improve(self):
-        dlg = ImproveDialog(self)
-        dlg.exec_()
-    def open_day_dialog(self, date: QDate):
-        dlg = TagesDialog(date, self)
-        dlg.exec_()
-    def refresh(self):
-        self.week_circle.set_score(weakly_score_berechnen())
-        self.apply_calendar_formats()
-    def apply_calendar_formats(self, year=None, month=None):
-        if year is None: year = self.calendar.yearShown()
-        if month is None: month = self.calendar.monthShown()
-        base_fmt = QTextCharFormat()
-        base_fmt.setBackground(QColor("#eeeeee"))
-        first = QDate(year, month, 1)
-        days = first.daysInMonth()
-        for d in range(1, days + 1):
-            self.calendar.setDateTextFormat(QDate(year, month, d), base_fmt)
-        for d in range(1, days + 1):
-            date = QDate(year, month, d)
-            score = tages_score_berechnen(date)
-            if score is None: continue
-            fmt = QTextCharFormat()
-            fmt.setBackground(QColor(score_to_color(score)))
-            self.calendar.setDateTextFormat(date, fmt)
-
 # -------------------------
 # MAIN WINDOW
 # -------------------------
@@ -1036,7 +968,6 @@ class MainWindow(QWidget):
 
         self.btn_gewohnheiten = QPushButton("Gewohnheiten")
         self.btn_massnahmen = QPushButton("Alle Maßnahmen") 
-        self.btn_wochenanzeige = QPushButton("Wochenanzeige")
 
         self.init_ui()
         self.connect_signals()
@@ -1051,18 +982,15 @@ class MainWindow(QWidget):
         self.view_massnahmen = MassnahmenAnsicht() 
         self.view_detail = DetailAnsicht()
         self.view_measure_detail = MassnahmeDetailAnsicht()
-        self.view_wochen = WochenAnsicht()
         
         self.stack.addWidget(self.view_gewohnheiten)     # Index 0
         self.stack.addWidget(self.view_massnahmen)       # Index 1
         self.stack.addWidget(self.view_detail)           # Index 2
-        self.stack.addWidget(self.view_wochen)           # Index 3
-        self.stack.addWidget(self.view_measure_detail)   # Index 4
+        self.stack.addWidget(self.view_measure_detail)   # Index 3
 
         sidebar_layout = QVBoxLayout()
         sidebar_layout.addWidget(self.btn_gewohnheiten)
         sidebar_layout.addWidget(self.btn_massnahmen)
-        sidebar_layout.addWidget(self.btn_wochenanzeige)
         sidebar_layout.addStretch()
 
         main_layout = QHBoxLayout(self)
@@ -1077,7 +1005,6 @@ class MainWindow(QWidget):
             self.view_massnahmen.lade_todos(),
             self.stack.setCurrentWidget(self.view_massnahmen)
         })
-        self.btn_wochenanzeige.clicked.connect(self.show_wochenanzeige)
         
         # Gewohnheiten Logik
         self.view_gewohnheiten.habit_clicked.connect(self.open_detail_view)
@@ -1112,9 +1039,6 @@ class MainWindow(QWidget):
         self.view_massnahmen.lade_massnahmen()
         self.view_massnahmen.lade_todos()
         
-    def show_wochenanzeige(self):
-        self.view_wochen.refresh()
-        self.stack.setCurrentWidget(self.view_wochen)
 
 if __name__ == "__main__":
     app = QApplication(sys.argv)
