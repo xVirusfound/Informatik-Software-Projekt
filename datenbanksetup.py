@@ -1,87 +1,71 @@
 import os
 import sqlite3
 
-# DB immer im Projektordner (bei dieser Datei), nicht abhängig vom Startordner
+# Bestimmt den Pfad zur Datenbank im gleichen Ordner wie dieses Skript
 DB_PATH = os.path.join(os.path.dirname(__file__), "datenbank.db")
 
 def get_conn():
+    """Baut die Verbindung zur SQLite-Datenbank auf und aktiviert Fremdschlüssel."""
     conn = sqlite3.connect(DB_PATH)
     conn.execute("PRAGMA foreign_keys = ON")
     return conn
 
 def setup_test_database():
+    """Erstellt alle benötigten Tabellen, falls sie noch nicht existieren."""
     conn = get_conn()
     c = conn.cursor()
-#erzeugt tabellen für statusse
-    c.execute("""
-        CREATE TABLE IF NOT EXISTS status (
-            name TEXT PRIMARY KEY
-        );
-        """)
-    c.execute("SELECT COUNT(*) FROM status")
-    countstatus = c.fetchone()[0]
 
-    if countstatus == 0:
-        #fügt statusse in tabelle ein
-        c.execute("""
-            INSERT INTO status VALUES
-            ('geplant'),
-            ('wip'),
-            ('umgesetzt');
-            """)
-    #erzeugt gewohnheitentabelle
+    # 1. Tabelle für Gewohnheiten
     c.execute("""
         CREATE TABLE IF NOT EXISTS gewohnheit (
-            id INTEGER PRIMARY KEY,
-            name TEXT UNIQUE,
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            name TEXT NOT NULL,
             beschreibung TEXT,
-            status TEXT,
-            score INTEGER,
-            FOREIGN KEY (status) REFERENCES status(name)
+            score INTEGER DEFAULT 0,
+            status TEXT DEFAULT 'wip'
         )
     """)
-    #erzeugt maßnahmentabelle
+
+    # 2. Tabelle für Maßnahmen
+    # HIER ist die neue Spalte 'effektivitaet' (1-5) und 'beschreibung' enthalten
     c.execute("""
         CREATE TABLE IF NOT EXISTS maßnahme (
-            id INTEGER PRIMARY KEY,
-            name TEXT,
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            name TEXT NOT NULL,
             gewohnheit_id INTEGER,
-            erledigt INTEGER DEFAULT 0
+            beschreibung TEXT,
+            effektivitaet INTEGER DEFAULT 3,
+            FOREIGN KEY(gewohnheit_id) REFERENCES gewohnheit(id)
         )
     """)
 
-    # erzeugt tabele für historische einträge
-    #status meint gemacht oder nicht gemacht
+    # 3. Tabelle für Todos (die an Maßnahmen hängen)
+    c.execute("""
+        CREATE TABLE IF NOT EXISTS todo (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            titel TEXT NOT NULL,
+            beschreibung TEXT,
+            massnahme_id INTEGER,
+            FOREIGN KEY(massnahme_id) REFERENCES maßnahme(id)
+        )
+    """)
+
+    # 4. Tabelle für die Kalender-Historie der Gewohnheiten
     c.execute("""
         CREATE TABLE IF NOT EXISTS gewohnheit_historie (
-            id INTEGER PRIMARY KEY,
-            gewohnheit_id INTEGER NOT NULL,
-            datum TEXT NOT NULL,
-            status INTEGER NOT NULL CHECK (status IN (0,1)),
-            created_at TEXT DEFAULT (datetime('now')),
+            gewohnheit_id INTEGER,
+            datum TEXT,
+            status INTEGER,
+            created_at TEXT,
             updated_at TEXT,
-            UNIQUE(gewohnheit_id, datum),
-            FOREIGN KEY (gewohnheit_id) REFERENCES gewohnheit(id) ON DELETE CASCADE
+            PRIMARY KEY (gewohnheit_id, datum),
+            FOREIGN KEY(gewohnheit_id) REFERENCES gewohnheit(id)
         )
     """)
 
-    c.execute("CREATE INDEX IF NOT EXISTS idx_gew_hist_gew_datum ON gewohnheit_historie(gewohnheit_id, datum)")
-
-    # Defaults nur einfügen, wenn Tabelle leer ist
-    c.execute("SELECT COUNT(*) FROM gewohnheit")
-    countgewohnheit = c.fetchone()[0]
-
-    if countgewohnheit == 0:
-        habits = [
-            ('Sport machen', 'Jeden zweiten Tag trainieren.'),
-            ('Gesund essen', 'Mehr Gemüse, weniger Zucker.'),
-            ('Früh aufstehen', 'Ziel: 06:00 Uhr aufstehen.'),
-            ('Nicht Doom Scrollen', 'Kein TikTok vor dem Schlafen.')
-        ]
-        c.executemany(
-            "INSERT INTO gewohnheit (name, beschreibung) VALUES (?, ?)",
-            habits
-        )
     conn.commit()
     conn.close()
 
+if __name__ == "__main__":
+    setup_test_database()
+    print("Datenbank-Setup erfolgreich: Alle Tabellen (inkl. Effektivität) sind bereit.")

@@ -164,6 +164,50 @@ class TagesDialog(QDialog):
         list_not.addItem("— noch in Arbeit —")
         layout.addWidget(list_not)
 
+class GewohnheitHinzufuegenDialog(QDialog):
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setWindowTitle("Neue Gewohnheit hinzufügen")
+        self.resize(400, 300)
+        layout = QVBoxLayout(self)
+
+        layout.addWidget(QLabel("Name der Gewohnheit:"))
+        self.input_name = QLineEdit()
+        layout.addWidget(self.input_name)
+
+        layout.addWidget(QLabel("Beschreibung:"))
+        self.input_desc = QTextEdit()
+        self.input_desc.setMaximumHeight(80)
+        layout.addWidget(self.input_desc)
+
+        btn_layout = QHBoxLayout()
+        btn_layout.addStretch()
+        self.btn_save = QPushButton("Hinzufügen")
+        self.btn_save.clicked.connect(self.speichern)
+        btn_layout.addWidget(self.btn_save)
+        layout.addLayout(btn_layout)
+
+    def speichern(self):
+        name = self.input_name.text().strip()
+        if not name:
+            QMessageBox.warning(self, "Fehler", "Bitte einen Namen eingeben.")
+            return
+
+        desc = self.input_desc.toPlainText()
+
+        conn = get_conn()
+        c = conn.cursor()
+        try:
+            # Score auf 0 und Status auf 'wip' (Work in Progress) als Standardwerte
+            c.execute("INSERT INTO gewohnheit (name, beschreibung, score, status) VALUES (?, ?, 0, 'wip')", 
+                      (name, desc))
+            conn.commit()
+        except sqlite3.IntegrityError:
+            QMessageBox.warning(self, "Fehler", "Fehler beim Speichern der Gewohnheit (Name evtl. schon vorhanden).")
+        finally:
+            conn.close()
+        self.accept()
+
 class MassnahmeHinzufuegenDialog(QDialog):
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -215,8 +259,8 @@ class MassnahmeHinzufuegenDialog(QDialog):
 
         conn = get_conn()
         c = conn.cursor()
-        # Default Effektivität auf 3 (Gelb) setzen, erledigt auf 0
-        c.execute("INSERT INTO maßnahme (name, gewohnheit_id, erledigt, beschreibung, effektivitaet) VALUES (?, ?, 0, ?, 3)", 
+        # Default Effektivität auf 3 (Gelb) setzen
+        c.execute("INSERT INTO maßnahme (name, gewohnheit_id, beschreibung, effektivitaet) VALUES (?, ?, ?, 3)", 
                   (name, habit_id, desc))
         conn.commit()
         conn.close()
@@ -401,12 +445,30 @@ class GewohnheitenAnsicht(QWidget):
     def __init__(self):
         super().__init__()
         layout = QVBoxLayout(self)
+        
+        # Header Links (Titel + Button)
+        header_left = QHBoxLayout()
+        label_g = QLabel("Alle Gewohnheiten")
+        font = QFont(); font.setBold(True); font.setPointSize(12)
+        label_g.setFont(font)
+        header_left.addWidget(label_g)
+        header_left.addStretch()
+        self.btn_add_g = QPushButton("Gewohnheit hinzufügen")
+        self.btn_add_g.clicked.connect(self.open_add_habit_dialog)
+        header_left.addWidget(self.btn_add_g)
+        layout.addLayout(header_left)
+        
         self.list_widget_gewohnheit = QListWidget()
         layout.addWidget(self.list_widget_gewohnheit)
         self.list_widget_gewohnheit.itemClicked.connect(self.on_item_clicked)
         self.list_widget_gewohnheit.setContextMenuPolicy(Qt.CustomContextMenu)
         self.list_widget_gewohnheit.customContextMenuRequested.connect(self.show_context_menu)
         self.lade_gewohnheiten()
+
+    def open_add_habit_dialog(self):
+        dlg = GewohnheitHinzufuegenDialog(self)
+        if dlg.exec_() == QDialog.Accepted:
+            self.lade_gewohnheiten()
 
     def lade_gewohnheiten(self):
         conn = get_conn()
@@ -502,7 +564,6 @@ class maßnahmenAnsicht(QWidget):
 
         # Liste Links
         self.list_widget_massnahme = QListWidget()
-        self.list_widget_massnahme.itemChanged.connect(self.on_measure_item_changed)
         self.list_widget_massnahme.itemClicked.connect(self.on_measure_item_clicked)
         self.list_widget_massnahme.setContextMenuPolicy(Qt.CustomContextMenu)
         self.list_widget_massnahme.customContextMenuRequested.connect(self.show_measure_context_menu)
@@ -553,27 +614,15 @@ class maßnahmenAnsicht(QWidget):
         if mid is not None:
             self.measure_clicked.emit(mid)
 
-    def on_measure_item_changed(self, item):
-        mid = item.data(Qt.UserRole)
-        new_state = 1 if item.checkState() == Qt.Checked else 0
-        if mid is not None:
-            conn = get_conn()
-            c = conn.cursor()
-            c.execute("UPDATE maßnahme SET erledigt = ? WHERE id = ?", (new_state, mid))
-            conn.commit()
-            conn.close()
-
     def lade_maßnahmen(self):
         conn = get_conn()
         c = conn.cursor()
-        c.execute("SELECT id, name, erledigt FROM maßnahme ORDER BY id")
+        c.execute("SELECT id, name FROM maßnahme ORDER BY id")
         zeilen = c.fetchall()
         self.list_widget_massnahme.blockSignals(True)
         self.list_widget_massnahme.clear()
-        for mid, name, erledigt in zeilen:
+        for mid, name in zeilen:
             item = QListWidgetItem(name)
-            item.setFlags(item.flags() | Qt.ItemIsUserCheckable)
-            item.setCheckState(Qt.Checked if erledigt == 1 else Qt.Unchecked)
             item.setData(Qt.UserRole, mid)
             self.list_widget_massnahme.addItem(item)
         self.list_widget_massnahme.blockSignals(False)
@@ -730,7 +779,7 @@ class MassnahmeDetailAnsicht(QWidget):
         header_layout.addWidget(self.btn_delete)
         layout.addLayout(header_layout)
 
-        # Zugeordnete Gewohnheit ändern (Dropdown) & Status
+        # Zugeordnete Gewohnheit ändern (Dropdown)
         info_layout = QHBoxLayout()
         
         # Links: Dropdown
@@ -743,14 +792,6 @@ class MassnahmeDetailAnsicht(QWidget):
         info_layout.addLayout(habit_layout)
         
         info_layout.addStretch()
-        
-        # Rechts: Status Checkbox
-        self.chk_status = QCheckBox("umgesetzt:")
-        font_chk = QFont(); font_chk.setBold(True)
-        self.chk_status.setFont(font_chk)
-        self.chk_status.setLayoutDirection(Qt.RightToLeft) # Checkbox rechts vom Text
-        self.chk_status.stateChanged.connect(self.speichere_status)
-        info_layout.addWidget(self.chk_status)
         
         layout.addLayout(info_layout)
         layout.addSpacing(10)
@@ -808,7 +849,7 @@ class MassnahmeDetailAnsicht(QWidget):
             
         # maßnahmendaten laden
         c.execute("""
-            SELECT name, gewohnheit_id, beschreibung, effektivitaet, erledigt 
+            SELECT name, gewohnheit_id, beschreibung, effektivitaet 
             FROM maßnahme 
             WHERE id = ?
         """, (self.current_measure_id,))
@@ -817,7 +858,7 @@ class MassnahmeDetailAnsicht(QWidget):
         conn.close()
 
         if result:
-            name, gewohnheit_id, beschreibung, effektivitaet, erledigt = result
+            name, gewohnheit_id, beschreibung, effektivitaet = result
             self.lbl_title.setText(name)
             
             # ComboBox auf aktuell zugeordnete Gewohnheit setzen
@@ -826,11 +867,6 @@ class MassnahmeDetailAnsicht(QWidget):
                 self.combo_habit.setCurrentIndex(idx)
                 
             self.txt_beschreibung.setText(beschreibung if beschreibung else "")
-            
-            # Checkbox Status setzen
-            self.chk_status.blockSignals(True)
-            self.chk_status.setChecked(bool(erledigt))
-            self.chk_status.blockSignals(False)
             
             # Button Status setzen
             if effektivitaet and 1 <= effektivitaet <= 5:
@@ -851,15 +887,6 @@ class MassnahmeDetailAnsicht(QWidget):
         conn = get_conn()
         c = conn.cursor()
         c.execute("UPDATE maßnahme SET gewohnheit_id = ? WHERE id = ?", (habit_id, self.current_measure_id))
-        conn.commit()
-        conn.close()
-
-    def speichere_status(self, state):
-        if self.current_measure_id is None: return
-        erledigt = 1 if state == Qt.Checked else 0
-        conn = get_conn()
-        c = conn.cursor()
-        c.execute("UPDATE maßnahme SET erledigt = ? WHERE id = ?", (erledigt, self.current_measure_id))
         conn.commit()
         conn.close()
 
@@ -936,7 +963,6 @@ class DetailAnsicht(QWidget):
 
         left_layout.addWidget(QLabel("Zugehörige maßnahmen:"))
         self.list_details = QListWidget()
-        self.list_details.itemChanged.connect(self.on_measure_changed)
         left_layout.addWidget(self.list_details)
         content_layout.addLayout(left_layout, stretch=1) 
 
@@ -1007,7 +1033,7 @@ class DetailAnsicht(QWidget):
         else:
             conn.close(); return
 
-        c.execute("SELECT id, name, erledigt FROM maßnahme WHERE gewohnheit_id = ? ORDER BY id", (self.current_habit_id,))
+        c.execute("SELECT id, name FROM maßnahme WHERE gewohnheit_id = ? ORDER BY id", (self.current_habit_id,))
         zeilen = c.fetchall()
         self.list_details.blockSignals(True)
         self.list_details.clear()
@@ -1016,24 +1042,12 @@ class DetailAnsicht(QWidget):
             info.setFlags(Qt.NoItemFlags)
             self.list_details.addItem(info)
         else:
-            for mid, name, erledigt in zeilen:
+            for mid, name in zeilen:
                 item = QListWidgetItem(name)
-                item.setFlags(item.flags() | Qt.ItemIsUserCheckable)
-                item.setCheckState(Qt.Checked if erledigt == 1 else Qt.Unchecked)
                 item.setData(Qt.UserRole, mid)
                 self.list_details.addItem(item)
         self.list_details.blockSignals(False)
         conn.close()
-
-    def on_measure_changed(self, item):
-        mid = item.data(Qt.UserRole)
-        new_state = 1 if item.checkState() == Qt.Checked else 0
-        if mid is not None:
-            conn = get_conn()
-            c = conn.cursor()
-            c.execute("UPDATE maßnahme SET erledigt = ? WHERE id = ?", (new_state, mid))
-            conn.commit()
-            conn.close()
 
     def speichere_beschreibung(self):
         if self.current_habit_id is None: return
@@ -1120,10 +1134,8 @@ class MainWindow(QWidget):
     def __init__(self):
         super().__init__()
         setup_test_database()
-        ensure_database_columns()  # WICHTIG: Prüft und updated DB-Schema
+        ensure_database_columns() # 
 
-        self.btn_gewohnheiten = QPushButton("Gewohnheiten")
-        self.btn_maßnahmen = QPushButton("Alle maßnahmen") 
         self.btn_gewohnheiten = QPushButton("Gewohnheiten")
         self.btn_maßnahmen = QPushButton("Alle maßnahmen")
 
@@ -1168,20 +1180,17 @@ class MainWindow(QWidget):
         self.btn_maßnahmen.clicked.connect(open_massnahmen_view)
         
         # Gewohnheiten Logik
-        # ... (hier geht dein normaler Code weiter) ...
-        
-        # Gewohnheiten Logik
         self.view_gewohnheiten.habit_clicked.connect(self.open_detail_view)
         self.view_gewohnheiten.habit_deleted.connect(self.on_habit_deleted)
         self.view_detail.back_clicked.connect(lambda: {
-            self.view_maßnahmen.lade_maßnahmen(), # Lade maßnahmen neu, falls sich Haken geändert haben
+            self.view_maßnahmen.lade_maßnahmen(), 
             self.stack.setCurrentWidget(self.view_gewohnheiten)
         })
 
         # maßnahmen Logik
         self.view_maßnahmen.measure_clicked.connect(self.open_measure_detail)
         self.view_measure_detail.back_clicked.connect(lambda: {
-            self.view_maßnahmen.lade_maßnahmen(), # Lade Liste neu, falls sich in Detailansicht etwas geändert hat
+            self.view_maßnahmen.lade_maßnahmen(), 
             self.stack.setCurrentWidget(self.view_maßnahmen)
         })
         self.view_measure_detail.measure_deleted.connect(lambda: {
@@ -1205,12 +1214,14 @@ class MainWindow(QWidget):
             """, (score,))
         conn.commit()
         conn.close()
+        
     def open_detail_view(self, habit_id):
         self.view_detail.set_habit(habit_id)
-        self.stack.setCurrentWidget(self.view_detail)#
+        self.stack.setCurrentWidget(self.view_detail)
         self.view_detail.update_score()
         self.view_detail.update_status()
         self.view_detail.apply_history_to_calendar_for_current_month()
+        
     def open_measure_detail(self, measure_id):
         self.view_measure_detail.set_measure(measure_id)
         self.stack.setCurrentWidget(self.view_measure_detail)
@@ -1218,8 +1229,15 @@ class MainWindow(QWidget):
     def on_habit_deleted(self, habit_id: int):
         if self.stack.currentWidget() == self.view_detail and self.view_detail.current_habit_id == habit_id:
             self.stack.setCurrentWidget(self.view_gewohnheiten)
+            
+        # Gesamtmaßnahmen-Ansicht aktualisieren (weil maßnahmen mitgelöscht wurden)
         self.view_maßnahmen.lade_maßnahmen()
         self.view_maßnahmen.lade_todos()
+        
+        # Wenn gerade die gelöschte Gewohnheit offen ist, zurück zur Liste
+        if self.stack.currentIndex() == 2 and self.view_detail.current_habit_id == habit_id:
+            self.stack.setCurrentIndex(0)
+            
         self.view_detail.apply_history_to_calendar_for_current_month()
         self.calculate_score(habit_id)
         self.view_detail.update_score()
@@ -1227,15 +1245,6 @@ class MainWindow(QWidget):
 
     def go_back_to_list(self):
         self.stack.setCurrentWidget(self.view_gewohnheiten)
-
-        
-    def on_habit_deleted(self, habit_id: int):
-        # Wenn gerade die gelöschte Gewohnheit offen ist, zurück zur Liste
-        if self.stack.currentIndex() == 2 and self.view_detail.current_habit_id == habit_id:
-            self.stack.setCurrentIndex(0)
-
-        # Gesamtmaßnahmen-Ansicht aktualisieren (weil maßnahmen mitgelöscht wurden)
-        self.view_maßnahmen.lade_maßnahmen()
 
 if __name__ == "__main__":
     setup_test_database()
