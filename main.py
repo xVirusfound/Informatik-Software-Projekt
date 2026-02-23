@@ -350,9 +350,7 @@ class DetailAnsicht(QWidget):
             WHERE id = ?
             """,(self.current_habit_id,))
         self.score = c.fetchone()[0]
-        print(self.score)
         self.scorelabel.setText(f"Score: {self.score}%")
-        print("Score upgedatet")
         conn.commit()
         conn.close()
 
@@ -375,7 +373,6 @@ class DetailAnsicht(QWidget):
         conn.commit()
         conn.close()
         self.statuslabel.setText(f"Score: {self.status}")
-        print("status upgedatet")
     def set_habit(self, habit_id: int):
         self.current_habit_id = habit_id
         self.lade_daten()
