@@ -350,7 +350,9 @@ class DetailAnsicht(QWidget):
             WHERE id = ?
             """,(self.current_habit_id,))
         self.score = c.fetchone()[0]
+        print(self.score)
         self.scorelabel.setText(f"Score: {self.score}%")
+        print("Score upgedatet")
         conn.commit()
         conn.close()
 
@@ -370,10 +372,10 @@ class DetailAnsicht(QWidget):
                 WHERE id = ?
                 """, (self.current_habit_id,))
         self.status = c.execute("SELECT status FROM gewohnheit WHERE id = ?", (self.current_habit_id,)).fetchone()[0]
-        print(self.status)
         conn.commit()
         conn.close()
         self.statuslabel.setText(f"Score: {self.status}")
+        print("status upgedatet")
     def set_habit(self, habit_id: int):
         self.current_habit_id = habit_id
         self.lade_daten()
@@ -515,6 +517,8 @@ class DetailAnsicht(QWidget):
         finally:
             conn.close()
 
+    def calculate_score(self,habit_id):
+        MainWindow.calculate_score(self,habit_id)
 
     def on_calendar_clicked(self, qdate: QDate):
         if self.current_habit_id is None:
@@ -549,6 +553,9 @@ class DetailAnsicht(QWidget):
 
         # Nach dem Setzen: Kalender neu formatieren
         self.apply_history_to_calendar_for_current_month()
+        self.calculate_score(self.current_habit_id)
+        self.update_score()
+        self.update_status()
 
     # Methode zum Laden/Färben:
     def apply_history_to_calendar_for_current_month(self):
@@ -647,7 +654,6 @@ class MainWindow(QWidget):
         self.calculate_score(habit_id)
         self.view_detail.update_score()
         self.view_detail.update_status()
-        print(self.view_detail.score)
 
     def go_back_to_list(self):
         self.stack.setCurrentWidget(self.view_gewohnheiten)
