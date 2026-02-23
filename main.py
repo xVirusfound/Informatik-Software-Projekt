@@ -1,5 +1,7 @@
 import sys
+import os
 import sqlite3
+from typing import List, Tuple
 from PyQt5.QtWidgets import (
     QApplication, QWidget, QPushButton, QLabel,
     QVBoxLayout, QHBoxLayout, QListWidget,
@@ -49,9 +51,13 @@ def ensure_database_columns():
     conn.close()
 
 # -------------------------
-# SCORE-LOGIK (vorerst Dummy)
+# Globale Funktionen
 # -------------------------
-
+DB_PATH = os.path.join(os.path.dirname(__file__), "datenbank.db")
+def get_conn():
+    conn = sqlite3.connect(DB_PATH)
+    conn.execute("PRAGMA foreign_keys = ON")
+    return conn
 def weakly_score_berechnen() -> int:
     return 67
 
@@ -96,7 +102,7 @@ class ScoreCircle(QWidget):
         self.setStyleSheet(f"background-color: {color}; border-radius: {radius}px;")
 
 # -------------------------
-# DIALOGE (Allgemein & Maßnahmen)
+# DIALOGE (Allgemein & maßnahmen)
 # -------------------------
 
 class StatistikDialog(QDialog):
@@ -238,7 +244,7 @@ class TodoHinzufuegenDialog(QDialog):
         layout.addWidget(QLabel("Einer Maßnahme zuordnen (optional):"))
         self.combo_massnahme = QComboBox()
         self.combo_massnahme.addItem("--- Keine ---", None)
-        self.lade_massnahmen()
+        self.lade_maßnahmen()
         layout.addWidget(self.combo_massnahme)
 
         btn_layout = QHBoxLayout()
@@ -248,7 +254,7 @@ class TodoHinzufuegenDialog(QDialog):
         btn_layout.addWidget(self.btn_save)
         layout.addLayout(btn_layout)
 
-    def lade_massnahmen(self):
+    def lade_maßnahmen(self):
         conn = get_conn()
         c = conn.cursor()
         c.execute("SELECT id, name FROM maßnahme ORDER BY name")
@@ -291,7 +297,7 @@ class TodoDetailDialog(QDialog):
         layout.addWidget(QLabel("Zugeordnete Maßnahme:"))
         self.combo_massnahme = QComboBox()
         self.combo_massnahme.addItem("--- Keine ---", None)
-        self.lade_massnahmen_options()
+        self.lade_maßnahmen_options()
         layout.addWidget(self.combo_massnahme)
 
         btn_layout = QHBoxLayout()
@@ -301,7 +307,7 @@ class TodoDetailDialog(QDialog):
         btn_layout.addWidget(self.btn_save)
         layout.addLayout(btn_layout)
 
-    def lade_massnahmen_options(self):
+    def lade_maßnahmen_options(self):
         conn = get_conn()
         c = conn.cursor()
         c.execute("SELECT id, name FROM maßnahme ORDER BY name")
@@ -348,6 +354,44 @@ class TodoDetailDialog(QDialog):
 
 # -------------------------
 # ANSICHTEN
+def set_habit_day(gewohnheit_id: int, datum_iso: str, status: int):
+    """Setzt oder aktualisiert den Eintrag für (habit, date). datum_iso = 'YYYY-MM-DD'"""
+    conn = get_conn()
+    c = conn.cursor()
+    c.execute("""
+        INSERT INTO gewohnheit_historie (gewohnheit_id, datum, status, created_at, updated_at)
+        VALUES (?, ?, ?, datetime('now'), datetime('now'))
+        ON CONFLICT(gewohnheit_id, datum) DO UPDATE
+          SET status = excluded.status,
+              updated_at = datetime('now')
+    """, (gewohnheit_id, datum_iso, int(status)))
+    conn.commit()
+    conn.close()
+
+def get_habit_day(gewohnheit_id: int, datum_iso: str) -> int | None:
+    """Gibt 0/1 zurück oder None wenn kein Eintrag existiert."""
+    conn = get_conn()
+    c = conn.cursor()
+    c.execute("SELECT status FROM gewohnheit_historie WHERE gewohnheit_id = ? AND datum = ?", (gewohnheit_id, datum_iso))
+    row = c.fetchone()
+    conn.close()
+    return row[0] if row else None
+
+def get_habit_history(gewohnheit_id: int, start_iso: str, end_iso: str) -> list[Tuple[str,int]]:
+    """Gibt Liste (datum_iso, status) ORDER BY datum zurück."""
+    conn = get_conn()
+    c = conn.cursor()
+    c.execute("""
+        SELECT datum, status FROM gewohnheit_historie
+        WHERE gewohnheit_id = ? AND datum BETWEEN ? AND ?
+        ORDER BY datum
+    """, (gewohnheit_id, start_iso, end_iso))
+    rows = c.fetchall()
+    conn.close()
+    return rows
+
+# -------------------------
+# Ansichten
 # -------------------------
 
 class GewohnheitenAnsicht(QWidget):
@@ -417,11 +461,11 @@ class GewohnheitenAnsicht(QWidget):
             self.lade_gewohnheiten()
 
     def delete_habit(self, habit_id: int):
-        reply = QMessageBox.question(self, "Löschen", "Gewohnheit und Maßnahmen wirklich löschen?", QMessageBox.Yes | QMessageBox.No)
+        reply = QMessageBox.question(self, "Löschen", "Gewohnheit und maßnahmen wirklich löschen?", QMessageBox.Yes | QMessageBox.No)
         if reply == QMessageBox.Yes:
             conn = get_conn()
             c = conn.cursor()
-            # Zuerst Todos löschen, die an Maßnahmen dieser Gewohnheit hängen
+            # Zuerst Todos löschen, die an maßnahmen dieser Gewohnheit hängen
             c.execute("DELETE FROM todo WHERE massnahme_id IN (SELECT id FROM maßnahme WHERE gewohnheit_id = ?)", (habit_id,))
             c.execute("DELETE FROM maßnahme WHERE gewohnheit_id = ?", (habit_id,))
             c.execute("DELETE FROM gewohnheit WHERE id = ?", (habit_id,))
@@ -431,7 +475,7 @@ class GewohnheitenAnsicht(QWidget):
             self.habit_deleted.emit(habit_id)
 
 
-class MassnahmenAnsicht(QWidget):
+class maßnahmenAnsicht(QWidget):
     measure_clicked = pyqtSignal(int)
 
     def __init__(self):
@@ -439,14 +483,14 @@ class MassnahmenAnsicht(QWidget):
         # Hauptlayout ist horizontal geteilt
         main_layout = QHBoxLayout(self)
 
-        # --- LINKER BEREICH: Maßnahmen Liste ---
+        # --- LINKER BEREICH: maßnahmen Liste ---
         left_container = QWidget()
         left_layout = QVBoxLayout(left_container)
         left_layout.setContentsMargins(0, 0, 10, 0)
 
         # Header Links
         header_left = QHBoxLayout()
-        label_m = QLabel("Alle Maßnahmen")
+        label_m = QLabel("Alle maßnahmen")
         font = QFont(); font.setBold(True); font.setPointSize(12)
         label_m.setFont(font)
         header_left.addWidget(label_m)
@@ -495,14 +539,14 @@ class MassnahmenAnsicht(QWidget):
         
         main_layout.addWidget(splitter)
 
-        self.lade_massnahmen()
+        self.lade_maßnahmen()
         self.lade_todos()
 
-    # --- Methoden für Maßnahmen (Links) ---
+    # --- Methoden für maßnahmen (Links) ---
     def open_add_measure_dialog(self):
         dlg = MassnahmeHinzufuegenDialog(self)
         if dlg.exec_() == QDialog.Accepted:
-            self.lade_massnahmen()
+            self.lade_maßnahmen()
 
     def on_measure_item_clicked(self, item):
         mid = item.data(Qt.UserRole)
@@ -519,7 +563,7 @@ class MassnahmenAnsicht(QWidget):
             conn.commit()
             conn.close()
 
-    def lade_massnahmen(self):
+    def lade_maßnahmen(self):
         conn = get_conn()
         c = conn.cursor()
         c.execute("SELECT id, name, erledigt FROM maßnahme ORDER BY id")
@@ -564,7 +608,7 @@ class MassnahmenAnsicht(QWidget):
             c.execute("UPDATE maßnahme SET name = ? WHERE id = ?", (new_name, measure_id))
             conn.commit()
             conn.close()
-            self.lade_massnahmen()
+            self.lade_maßnahmen()
 
     def delete_measure(self, measure_id: int):
         reply = QMessageBox.question(self, "Löschen", "Maßnahme löschen? Zugehörige Todos werden auch gelöscht.", QMessageBox.Yes | QMessageBox.No)
@@ -575,7 +619,7 @@ class MassnahmenAnsicht(QWidget):
             c.execute("DELETE FROM maßnahme WHERE id = ?", (measure_id,))
             conn.commit()
             conn.close()
-            self.lade_massnahmen()
+            self.lade_maßnahmen()
             self.lade_todos() # Todos neu laden, da manche gelöscht sein könnten
 
     # --- Methoden für To-Dos (Rechts) ---
@@ -674,7 +718,7 @@ class MassnahmeDetailAnsicht(QWidget):
         self.btn_back.clicked.connect(self.back_clicked.emit)
         header_layout.addWidget(self.btn_back)
 
-        self.lbl_title = QLabel("Maßnahmen Name")
+        self.lbl_title = QLabel("maßnahmen Name")
         font = QFont(); font.setBold(True); font.setPointSize(12)
         self.lbl_title.setFont(font)
         header_layout.addWidget(self.lbl_title)
@@ -762,7 +806,7 @@ class MassnahmeDetailAnsicht(QWidget):
         for hid, name in c.fetchall():
             self.combo_habit.addItem(name, hid)
             
-        # Maßnahmendaten laden
+        # maßnahmendaten laden
         c.execute("""
             SELECT name, gewohnheit_id, beschreibung, effektivitaet, erledigt 
             FROM maßnahme 
@@ -856,7 +900,9 @@ class DetailAnsicht(QWidget):
 
     def __init__(self):
         super().__init__()
-        self.current_habit_id = None
+        self.current_habit_id = 1
+        self.score = 0
+        self.status = "wip"
         layout = QVBoxLayout(self)
 
         header_layout = QHBoxLayout()
@@ -887,20 +933,62 @@ class DetailAnsicht(QWidget):
 
         content_layout = QHBoxLayout()
         left_layout = QVBoxLayout()
-        left_layout.addWidget(QLabel("Maßnahmen (haken):"))
+
+        left_layout.addWidget(QLabel("Zugehörige maßnahmen:"))
         self.list_details = QListWidget()
         self.list_details.itemChanged.connect(self.on_measure_changed)
         left_layout.addWidget(self.list_details)
         content_layout.addLayout(left_layout, stretch=1) 
 
         right_layout = QVBoxLayout()
+
+        self.scorelabel = QLabel(f"Score: {self.score}%")
+        right_layout.addWidget(self.scorelabel)
+
+        self.statuslabel = QLabel(f"Score: {self.status}")
+        right_layout.addWidget(self.statuslabel)
+
         right_layout.addWidget(QLabel("Kalender:"))
         self.calendar = QCalendarWidget()
         self.calendar.setGridVisible(True)
-        self.calendar.setMaximumSize(350, 250) 
+        self.calendar.setMaximumSize(350, 250)
+        self.calendar.clicked.connect(self.on_calendar_clicked)
         right_layout.addWidget(self.calendar, alignment=Qt.AlignTop)
         content_layout.addLayout(right_layout, stretch=1)
         layout.addLayout(content_layout)
+
+    def update_score(self):
+        conn = get_conn()
+        c = conn.cursor()
+        c.execute("""
+            SELECT score
+            FROM gewohnheit
+            WHERE id = ?
+            """,(self.current_habit_id,))
+        self.score = c.fetchone()[0]
+        self.scorelabel.setText(f"Score: {self.score}%")
+        conn.commit()
+        conn.close()
+
+    def update_status(self):
+        conn=get_conn()
+        c = conn.cursor()
+        if self.score >= 80:
+            c.execute("""
+                UPDATE gewohnheit
+                SET status = "umgesetzt"
+                WHERE id = ?
+                """, (self.current_habit_id,))
+        elif self.score <= 80:
+            c.execute("""
+                UPDATE gewohnheit
+                SET status = "wip"
+                WHERE id = ?
+                """, (self.current_habit_id,))
+        self.status = c.execute("SELECT status FROM gewohnheit WHERE id = ?", (self.current_habit_id,)).fetchone()[0]
+        conn.commit()
+        conn.close()
+        self.statuslabel.setText(f"Score: {self.status}")
 
     def set_habit(self, habit_id: int):
         self.current_habit_id = habit_id
@@ -924,7 +1012,7 @@ class DetailAnsicht(QWidget):
         self.list_details.blockSignals(True)
         self.list_details.clear()
         if not zeilen:
-            info = QListWidgetItem("Keine Maßnahmen gefunden.")
+            info = QListWidgetItem("Keine maßnahmen gefunden.")
             info.setFlags(Qt.NoItemFlags)
             self.list_details.addItem(info)
         else:
@@ -956,8 +1044,76 @@ class DetailAnsicht(QWidget):
         conn.commit()
         conn.close()
 
+
 # -------------------------
 # MAIN WINDOW
+    def calculate_score(self,habit_id):
+        MainWindow.calculate_score(self,habit_id)
+
+    def on_calendar_clicked(self, qdate: QDate):
+        if self.current_habit_id is None:
+            return
+        datum_iso = qdate.toString("yyyy-MM-dd")
+        current = get_habit_day(self.current_habit_id, datum_iso)  # None / 0 / 1
+
+        # Einfacher Dialog: Yes = gemacht, No = nicht gemacht, Cancel = nichts
+        msg = QMessageBox(self)
+        msg.setWindowTitle(qdate.toString("dd.MM.yyyy"))
+        msg.setText("Markiere diesen Tag für die Gewohnheit:")
+        btn_yes = msg.addButton("Gemacht", QMessageBox.YesRole)
+        btn_no = msg.addButton("Nicht gemacht", QMessageBox.NoRole)
+        btn_delete = msg.addButton("Eintrag löschen", QMessageBox.DestructiveRole)
+        msg.addButton("Abbrechen", QMessageBox.RejectRole)
+        msg.exec_()
+
+        clicked = msg.clickedButton()
+        if clicked == btn_yes:
+            set_habit_day(self.current_habit_id, datum_iso, 1)
+        elif clicked == btn_no:
+            set_habit_day(self.current_habit_id, datum_iso, 0)
+        elif clicked == btn_delete:
+            # delete entry
+            conn = get_conn()
+            c = conn.cursor()
+            c.execute("DELETE FROM gewohnheit_historie WHERE gewohnheit_id = ? AND datum = ?", (self.current_habit_id, datum_iso))
+            conn.commit()
+            conn.close()
+        else:
+            return
+
+        # Nach dem Setzen: Kalender neu formatieren
+        self.apply_history_to_calendar_for_current_month()
+        self.calculate_score(self.current_habit_id)
+        self.update_score()
+        self.update_status()
+
+    # Methode zum Laden/Färben:
+    def apply_history_to_calendar_for_current_month(self):
+        year = self.calendar.yearShown()
+        month = self.calendar.monthShown()
+        first = QDate(year, month, 1)
+        days = first.daysInMonth()
+        start_iso = QDate(year, month, 1).toString("yyyy-MM-dd")
+        end_iso = QDate(year, month, days).toString("yyyy-MM-dd")
+
+        rows = get_habit_history(self.current_habit_id, start_iso, end_iso)
+        # setze zuerst Default-Format (z.B. hellgrau)
+        base_fmt = QTextCharFormat()
+        base_fmt.setBackground(QColor("#eeeeee"))
+        for d in range(1, days + 1):
+            self.calendar.setDateTextFormat(QDate(year, month, d), base_fmt)
+
+        for datum_iso, status in rows:
+            y, m, d = map(int, datum_iso.split("-"))
+            date = QDate(y, m, d)
+            fmt = QTextCharFormat()
+            if status == 1:
+                fmt.setBackground(QColor("#4caf50"))   # grün = gemacht
+            else:
+                fmt.setBackground(QColor("#ff4d4d"))   # rot = nicht gemacht
+            self.calendar.setDateTextFormat(date, fmt)
+# -------------------------
+# Main Window
 # -------------------------
 
 class MainWindow(QWidget):
@@ -967,7 +1123,9 @@ class MainWindow(QWidget):
         ensure_database_columns()  # WICHTIG: Prüft und updated DB-Schema
 
         self.btn_gewohnheiten = QPushButton("Gewohnheiten")
-        self.btn_massnahmen = QPushButton("Alle Maßnahmen") 
+        self.btn_maßnahmen = QPushButton("Alle maßnahmen") 
+        self.btn_gewohnheiten = QPushButton("Gewohnheiten")
+        self.btn_maßnahmen = QPushButton("Alle maßnahmen")
 
         self.init_ui()
         self.connect_signals()
@@ -979,18 +1137,18 @@ class MainWindow(QWidget):
         self.stack = QStackedWidget()
         
         self.view_gewohnheiten = GewohnheitenAnsicht()
-        self.view_massnahmen = MassnahmenAnsicht() 
+        self.view_maßnahmen = maßnahmenAnsicht() 
         self.view_detail = DetailAnsicht()
         self.view_measure_detail = MassnahmeDetailAnsicht()
         
         self.stack.addWidget(self.view_gewohnheiten)     # Index 0
-        self.stack.addWidget(self.view_massnahmen)       # Index 1
+        self.stack.addWidget(self.view_maßnahmen)       # Index 1
         self.stack.addWidget(self.view_detail)           # Index 2
         self.stack.addWidget(self.view_measure_detail)   # Index 3
 
         sidebar_layout = QVBoxLayout()
         sidebar_layout.addWidget(self.btn_gewohnheiten)
-        sidebar_layout.addWidget(self.btn_massnahmen)
+        sidebar_layout.addWidget(self.btn_maßnahmen)
         sidebar_layout.addStretch()
 
         main_layout = QHBoxLayout(self)
@@ -1000,35 +1158,59 @@ class MainWindow(QWidget):
     def connect_signals(self):
         # Sidebar Navigation
         self.btn_gewohnheiten.clicked.connect(lambda: self.stack.setCurrentWidget(self.view_gewohnheiten))
-        self.btn_massnahmen.clicked.connect(lambda: {
-            self.view_massnahmen.lade_massnahmen(), 
-            self.view_massnahmen.lade_todos(),
-            self.stack.setCurrentWidget(self.view_massnahmen)
-        })
+        
+        # Hilfsfunktion, um die Maßnahmen-Ansicht sauber zu laden und anzuzeigen
+        def open_massnahmen_view():
+            self.view_maßnahmen.lade_maßnahmen()
+            self.view_maßnahmen.lade_todos()
+            self.stack.setCurrentWidget(self.view_maßnahmen)
+            
+        self.btn_maßnahmen.clicked.connect(open_massnahmen_view)
+        
+        # Gewohnheiten Logik
+        # ... (hier geht dein normaler Code weiter) ...
         
         # Gewohnheiten Logik
         self.view_gewohnheiten.habit_clicked.connect(self.open_detail_view)
         self.view_gewohnheiten.habit_deleted.connect(self.on_habit_deleted)
         self.view_detail.back_clicked.connect(lambda: {
-            self.view_massnahmen.lade_massnahmen(), # Lade Maßnahmen neu, falls sich Haken geändert haben
+            self.view_maßnahmen.lade_maßnahmen(), # Lade maßnahmen neu, falls sich Haken geändert haben
             self.stack.setCurrentWidget(self.view_gewohnheiten)
         })
 
-        # Maßnahmen Logik
-        self.view_massnahmen.measure_clicked.connect(self.open_measure_detail)
+        # maßnahmen Logik
+        self.view_maßnahmen.measure_clicked.connect(self.open_measure_detail)
         self.view_measure_detail.back_clicked.connect(lambda: {
-            self.view_massnahmen.lade_massnahmen(), # Lade Liste neu, falls sich in Detailansicht etwas geändert hat
-            self.stack.setCurrentWidget(self.view_massnahmen)
+            self.view_maßnahmen.lade_maßnahmen(), # Lade Liste neu, falls sich in Detailansicht etwas geändert hat
+            self.stack.setCurrentWidget(self.view_maßnahmen)
         })
         self.view_measure_detail.measure_deleted.connect(lambda: {
-            self.view_massnahmen.lade_massnahmen(),
-            self.view_massnahmen.lade_todos()
+            self.view_maßnahmen.lade_maßnahmen(),
+            self.view_maßnahmen.lade_todos()
         })
 
+    def calculate_score(self,habit_id):
+        conn = get_conn()
+        c = conn.cursor()
+        rows = c.execute("""
+            SELECT status
+            FROM gewohnheit_historie
+            WHERE gewohnheit_id = ?;
+            """, (habit_id,)).fetchall()
+        werte = [row[0] for row in rows]
+        score = int(sum(werte)/(len(werte)+1)*100) #TODO: Division durch 0 cleaner fixen
+        c.execute("""
+            UPDATE gewohnheit
+            SET score = ?
+            """, (score,))
+        conn.commit()
+        conn.close()
     def open_detail_view(self, habit_id):
         self.view_detail.set_habit(habit_id)
-        self.stack.setCurrentWidget(self.view_detail)
-
+        self.stack.setCurrentWidget(self.view_detail)#
+        self.view_detail.update_score()
+        self.view_detail.update_status()
+        self.view_detail.apply_history_to_calendar_for_current_month()
     def open_measure_detail(self, measure_id):
         self.view_measure_detail.set_measure(measure_id)
         self.stack.setCurrentWidget(self.view_measure_detail)
@@ -1036,11 +1218,27 @@ class MainWindow(QWidget):
     def on_habit_deleted(self, habit_id: int):
         if self.stack.currentWidget() == self.view_detail and self.view_detail.current_habit_id == habit_id:
             self.stack.setCurrentWidget(self.view_gewohnheiten)
-        self.view_massnahmen.lade_massnahmen()
-        self.view_massnahmen.lade_todos()
+        self.view_maßnahmen.lade_maßnahmen()
+        self.view_maßnahmen.lade_todos()
+        self.view_detail.apply_history_to_calendar_for_current_month()
+        self.calculate_score(habit_id)
+        self.view_detail.update_score()
+        self.view_detail.update_status()
+
+    def go_back_to_list(self):
+        self.stack.setCurrentWidget(self.view_gewohnheiten)
+
         
+    def on_habit_deleted(self, habit_id: int):
+        # Wenn gerade die gelöschte Gewohnheit offen ist, zurück zur Liste
+        if self.stack.currentIndex() == 2 and self.view_detail.current_habit_id == habit_id:
+            self.stack.setCurrentIndex(0)
+
+        # Gesamtmaßnahmen-Ansicht aktualisieren (weil maßnahmen mitgelöscht wurden)
+        self.view_maßnahmen.lade_maßnahmen()
 
 if __name__ == "__main__":
+    setup_test_database()
     app = QApplication(sys.argv)
     window = MainWindow()
     window.show()
