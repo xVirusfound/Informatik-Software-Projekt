@@ -12,6 +12,9 @@ from PyQt5.QtWidgets import (
 )
 from PyQt5.QtCore import Qt, pyqtSignal, QDate, QSize, QTimer
 from PyQt5.QtGui import QFont, QTextCharFormat, QColor, QIcon
+from PyQt5.QtWidgets import QScrollArea, QAbstractItemView, QSizePolicy
+from PyQt5.QtCore import QMimeData
+from PyQt5.QtGui import QDrag
 
 # Falls deine Datei anders heißt, passe diesen Import an:
 from datenbanksetup import setup_test_database, get_conn
@@ -20,23 +23,31 @@ from datenbanksetup import setup_test_database, get_conn
 # HILFSFUNKTION: DB ERWEITERN
 # -------------------------
 def ensure_database_columns():
-    """Prüft, ob die neuen Spalten und Tabellen existieren, und fügt sie notfalls hinzu."""
+    """Prüft, ob neue Spalten/Tabellen existieren und fügt sie notfalls hinzu."""
     conn = get_conn()
     c = conn.cursor()
-    
-    # 1. Tabelle maßnahme prüfen und erweitern
-    c.execute("PRAGMA table_info(maßnahme)")
-    columns = [info[1] for info in c.fetchall()]
-    
-    if "beschreibung" not in columns:
-        print("Füge Spalte 'beschreibung' zur Tabelle 'maßnahme' hinzu...")
-        c.execute("ALTER TABLE maßnahme ADD COLUMN beschreibung TEXT")
-        
-    if "effektivitaet" not in columns:
-        print("Füge Spalte 'effektivitaet' zur Tabelle 'maßnahme' hinzu...")
-        c.execute("ALTER TABLE maßnahme ADD COLUMN effektivitaet INTEGER DEFAULT 3")
 
-    # 2. Neue Tabelle für Todos erstellen, falls nicht vorhanden
+    # -------------------------
+    # Tabelle "maßnahme" erweitern
+    # -------------------------
+    c.execute('PRAGMA table_info("maßnahme")')
+    columns = [info[1] for info in c.fetchall()]
+
+    if "beschreibung" not in columns:
+        c.execute('ALTER TABLE "maßnahme" ADD COLUMN beschreibung TEXT')
+
+    if "effektivitaet" not in columns:
+        c.execute('ALTER TABLE "maßnahme" ADD COLUMN effektivitaet INTEGER DEFAULT 3')
+
+    # NEU: status für Maßnahmen (aktiv/geplant/ausser_kraft)
+    if "status" not in columns:
+        c.execute('ALTER TABLE "maßnahme" ADD COLUMN status TEXT DEFAULT "aktiv"')
+    # vorhandene NULLs sauber setzen
+    c.execute('UPDATE "maßnahme" SET status="aktiv" WHERE status IS NULL')
+
+    # -------------------------
+    # Todo Tabelle (wie bei dir)
+    # -------------------------
     c.execute("""
         CREATE TABLE IF NOT EXISTS todo (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -46,7 +57,34 @@ def ensure_database_columns():
             FOREIGN KEY(massnahme_id) REFERENCES maßnahme(id)
         )
     """)
-        
+
+    # -------------------------
+    # NEU: Weekly Review Tabelle (Reflexion pro KW)
+    # -------------------------
+    c.execute("""
+        CREATE TABLE IF NOT EXISTS weekly_review (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            gewohnheit_id INTEGER NOT NULL,
+            iso_year INTEGER NOT NULL,
+            iso_week INTEGER NOT NULL,
+            reflection TEXT DEFAULT "",
+            created_at TEXT DEFAULT (datetime('now')),
+            updated_at TEXT DEFAULT (datetime('now')),
+            UNIQUE(gewohnheit_id, iso_year, iso_week),
+            FOREIGN KEY(gewohnheit_id) REFERENCES gewohnheit(id) ON DELETE CASCADE
+        )
+    """)
+
+    # -------------------------
+    # Migration: falls du früher "umgesetzt" genutzt hast -> "implementiert"
+    # (Damit Kanban exakt deine Spaltennamen nutzt.)
+    # -------------------------
+    try:
+        c.execute('UPDATE "gewohnheit" SET status="implementiert" WHERE status="umgesetzt"')
+    except sqlite3.OperationalError:
+        # falls die Tabelle/Spalte in deinem setup anders heißt
+        pass
+
     conn.commit()
     conn.close()
 
@@ -199,8 +237,10 @@ class GewohnheitHinzufuegenDialog(QDialog):
         c = conn.cursor()
         try:
             # Score auf 0 und Status auf 'wip' (Work in Progress) als Standardwerte
-            c.execute("INSERT INTO gewohnheit (name, beschreibung, score, status) VALUES (?, ?, 0, 'wip')", 
-                      (name, desc))
+            c.execute(
+                "INSERT INTO gewohnheit (name, beschreibung, score, status) VALUES (?, ?, 70, ?)",
+                (name, desc, HABIT_STATUS_GEPLANT)
+                )
             conn.commit()
         except sqlite3.IntegrityError:
             QMessageBox.warning(self, "Fehler", "Fehler beim Speichern der Gewohnheit (Name evtl. schon vorhanden).")
@@ -260,8 +300,10 @@ class MassnahmeHinzufuegenDialog(QDialog):
         conn = get_conn()
         c = conn.cursor()
         # Default Effektivität auf 3 (Gelb) setzen
-        c.execute("INSERT INTO maßnahme (name, gewohnheit_id, beschreibung, effektivitaet) VALUES (?, ?, ?, 3)", 
-                  (name, habit_id, desc))
+        c.execute(
+            'INSERT INTO "maßnahme" (name, gewohnheit_id, beschreibung, effektivitaet, status) VALUES (?, ?, ?, 3, ?)',
+            (name, habit_id, desc, MEASURE_STATUS_AKTIV)
+            )
         conn.commit()
         conn.close()
         self.accept()
@@ -434,6 +476,117 @@ def get_habit_history(gewohnheit_id: int, start_iso: str, end_iso: str) -> list[
     conn.close()
     return rows
 
+HABIT_STATUS_GEPLANT = "geplant"
+HABIT_STATUS_WIP = "wip"
+HABIT_STATUS_IMPL = "implementiert"
+
+MEASURE_STATUS_AKTIV = "aktiv"
+MEASURE_STATUS_GEPLANT = "geplant"
+MEASURE_STATUS_AUSSER_KRAFT = "ausser_kraft"
+
+def set_habit_status(habit_id: int, status: str) -> bool:
+    """
+    Setzt den Status einer Gewohnheit.
+    Falls gewohnheit.status ein FOREIGN KEY ist, wird der Statuswert
+    vorher in die Referenz-Tabelle eingetragen (INSERT OR IGNORE).
+    Gibt True/False zurück statt zu crashen.
+    """
+    conn = get_conn()
+    try:
+        c = conn.cursor()
+
+        # Prüfen, ob "status" ein Foreign Key ist
+        fk = c.execute('PRAGMA foreign_key_list("gewohnheit")').fetchall()
+        status_fk = next((r for r in fk if r[3] == "status"), None)
+
+        if status_fk:
+            ref_table = status_fk[2]  # Referenz-Tabelle
+            ref_col = status_fk[4]    # Referenz-Spalte (meist "status" oder "name")
+
+            # Falls Referenzspalte leer/unbrauchbar ist, fallback auf "name"/"status"
+            cols = [r[1] for r in c.execute(f'PRAGMA table_info("{ref_table}")').fetchall()]
+            if ref_col not in cols:
+                if "status" in cols:
+                    ref_col = "status"
+                elif "name" in cols:
+                    ref_col = "name"
+
+            # Statuswert sicherstellen (wichtig für "implementiert")
+            if ref_col in cols:
+                c.execute(
+                    f'INSERT OR IGNORE INTO "{ref_table}"("{ref_col}") VALUES (?)',
+                    (status,)
+                )
+
+        # Jetzt Status in gewohnheit setzen
+        c.execute('UPDATE "gewohnheit" SET status=? WHERE id=?', (status, habit_id))
+        conn.commit()
+        return True
+
+    except sqlite3.IntegrityError:
+        conn.rollback()
+        return False
+    finally:
+        conn.close()
+
+def set_measure_status(measure_id: int, status: str):
+    conn = get_conn()
+    c = conn.cursor()
+    c.execute('UPDATE "maßnahme" SET status=? WHERE id=?', (status, measure_id))
+    conn.commit()
+    conn.close()
+
+def iso_week_year(qdate: QDate) -> tuple[int, int]:
+    # PyQt liefert typischerweise (week, year)
+    week, year = qdate.weekNumber()
+    return int(week), int(year)
+
+def monday_of_week(qdate: QDate) -> QDate:
+    # Monday = 1 ... Sunday = 7
+    return qdate.addDays(1 - qdate.dayOfWeek())
+
+def week_dates(qdate: QDate) -> list[QDate]:
+    mon = monday_of_week(qdate)
+    return [mon.addDays(i) for i in range(7)]
+
+def upsert_weekly_reflection(habit_id: int, iso_year: int, iso_week: int, text: str):
+    conn = get_conn()
+    c = conn.cursor()
+    c.execute("""
+        INSERT INTO weekly_review (gewohnheit_id, iso_year, iso_week, reflection, created_at, updated_at)
+        VALUES (?, ?, ?, ?, datetime('now'), datetime('now'))
+        ON CONFLICT(gewohnheit_id, iso_year, iso_week) DO UPDATE
+            SET reflection=excluded.reflection,
+                updated_at=datetime('now')
+    """, (habit_id, iso_year, iso_week, text))
+    conn.commit()
+    conn.close()
+
+def get_weekly_reflection(habit_id: int, iso_year: int, iso_week: int) -> str:
+    conn = get_conn()
+    c = conn.cursor()
+    c.execute("""
+        SELECT reflection FROM weekly_review
+        WHERE gewohnheit_id=? AND iso_year=? AND iso_week=?
+    """, (habit_id, iso_year, iso_week))
+    row = c.fetchone()
+    conn.close()
+    return row[0] if row and row[0] else ""
+
+def get_old_weekly_reflections(habit_id: int, iso_year: int, iso_week: int, limit: int = 3) -> list[tuple[int,int,str]]:
+    conn = get_conn()
+    c = conn.cursor()
+    c.execute("""
+        SELECT iso_year, iso_week, reflection
+        FROM weekly_review
+        WHERE gewohnheit_id=?
+          AND (iso_year < ? OR (iso_year = ? AND iso_week < ?))
+        ORDER BY iso_year DESC, iso_week DESC
+        LIMIT ?
+    """, (habit_id, iso_year, iso_year, iso_week, limit))
+    rows = c.fetchall()
+    conn.close()
+    return [(int(y), int(w), r or "") for (y, w, r) in rows]
 # -------------------------
 # Ansichten
 # -------------------------
@@ -486,19 +639,38 @@ class GewohnheitenAnsicht(QWidget):
         habit_id = item.data(Qt.UserRole)
         if habit_id is not None:
             self.habit_clicked.emit(habit_id)
-
+            
     def show_context_menu(self, pos):
         item = self.list_widget_gewohnheit.itemAt(pos)
-        if not item: return
+        if not item:
+            return
         habit_id = item.data(Qt.UserRole)
+        
         menu = QMenu(self)
+        
         act_rename = menu.addAction("Neu benennen")
+        status_menu = menu.addMenu("Status setzen")
+        act_geplant = status_menu.addAction("geplant")
+        act_wip = status_menu.addAction("wip")
+        act_impl = status_menu.addAction("implementiert")
+        
+        menu.addSeparator()
         act_delete = menu.addAction("Löschen")
+        
         action = menu.exec_(self.list_widget_gewohnheit.mapToGlobal(pos))
         if action == act_rename:
             self.rename_habit(habit_id)
         elif action == act_delete:
             self.delete_habit(habit_id)
+        elif action == act_geplant:
+            set_habit_status(habit_id, HABIT_STATUS_GEPLANT)
+            self.lade_gewohnheiten()
+        elif action == act_wip:
+            set_habit_status(habit_id, HABIT_STATUS_WIP)
+            self.lade_gewohnheiten()
+        elif action == act_impl:
+            set_habit_status(habit_id, HABIT_STATUS_IMPL)
+            self.lade_gewohnheiten()
 
     def rename_habit(self, habit_id: int):
         conn = get_conn()
@@ -523,18 +695,46 @@ class GewohnheitenAnsicht(QWidget):
             self.lade_gewohnheiten()
 
     def delete_habit(self, habit_id: int):
-        reply = QMessageBox.question(self, "Löschen", "Gewohnheit und maßnahmen wirklich löschen?", QMessageBox.Yes | QMessageBox.No)
-        if reply == QMessageBox.Yes:
-            conn = get_conn()
+        reply = QMessageBox.question(
+            self,
+            "Löschen",
+            "Gewohnheit und Maßnahmen wirklich löschen?",
+            QMessageBox.Yes | QMessageBox.No
+            )
+        if reply != QMessageBox.Yes:
+            return
+    
+        conn = get_conn()
+        try:
             c = conn.cursor()
-            # Zuerst Todos löschen, die an maßnahmen dieser Gewohnheit hängen
-            c.execute("DELETE FROM todo WHERE massnahme_id IN (SELECT id FROM maßnahme WHERE gewohnheit_id = ?)", (habit_id,))
-            c.execute("DELETE FROM maßnahme WHERE gewohnheit_id = ?", (habit_id,))
-            c.execute("DELETE FROM gewohnheit WHERE id = ?", (habit_id,))
+    
+            # 1) abhängige Daten löschen (wichtig wegen FK!)
+            c.execute("DELETE FROM gewohnheit_historie WHERE gewohnheit_id = ?", (habit_id,))
+            c.execute("DELETE FROM weekly_review WHERE gewohnheit_id = ?", (habit_id,))  # falls kein CASCADE greift
+    
+            # 2) Todos löschen, die an Maßnahmen dieser Gewohnheit hängen
+            c.execute("""
+                DELETE FROM todo
+                WHERE massnahme_id IN (SELECT id FROM "maßnahme" WHERE gewohnheit_id = ?)
+            """, (habit_id,))
+    
+            # 3) Maßnahmen löschen
+            c.execute('DELETE FROM "maßnahme" WHERE gewohnheit_id = ?', (habit_id,))
+    
+            # 4) Gewohnheit löschen
+            c.execute('DELETE FROM "gewohnheit" WHERE id = ?', (habit_id,))
+    
             conn.commit()
+    
+        except sqlite3.IntegrityError as e:
+            conn.rollback()
+            QMessageBox.critical(self, "DB-Fehler", f"Löschen fehlgeschlagen:\n\n{e}")
+            return
+        finally:
             conn.close()
-            self.lade_gewohnheiten()
-            self.habit_deleted.emit(habit_id)
+    
+        self.lade_gewohnheiten()
+        self.habit_deleted.emit(habit_id)
 
 
 class maßnahmenAnsicht(QWidget):
@@ -971,7 +1171,7 @@ class DetailAnsicht(QWidget):
         self.scorelabel = QLabel(f"Score: {self.score}%")
         right_layout.addWidget(self.scorelabel)
 
-        self.statuslabel = QLabel(f"Score: {self.status}")
+        self.statuslabel = QLabel(f"Status: {self.status}")
         right_layout.addWidget(self.statuslabel)
 
         right_layout.addWidget(QLabel("Kalender:"))
@@ -986,35 +1186,25 @@ class DetailAnsicht(QWidget):
     def update_score(self):
         conn = get_conn()
         c = conn.cursor()
-        c.execute("""
-            SELECT score
-            FROM gewohnheit
-            WHERE id = ?
-            """,(self.current_habit_id,))
-        self.score = c.fetchone()[0]
-        self.scorelabel.setText(f"Score: {self.score}%")
-        conn.commit()
+        c.execute("SELECT score FROM gewohnheit WHERE id = ?", (self.current_habit_id,))
+        row = c.fetchone()
         conn.close()
+    
+        if not row:
+            self.score = 0
+            self.scorelabel.setText("Score: —")
+            return
+    
+        self.score = row[0]
+        self.scorelabel.setText(f"Score: {self.score}%")
 
     def update_status(self):
-        conn=get_conn()
+        conn = get_conn()
         c = conn.cursor()
-        if self.score >= 80:
-            c.execute("""
-                UPDATE gewohnheit
-                SET status = "umgesetzt"
-                WHERE id = ?
-                """, (self.current_habit_id,))
-        elif self.score <= 80:
-            c.execute("""
-                UPDATE gewohnheit
-                SET status = "wip"
-                WHERE id = ?
-                """, (self.current_habit_id,))
-        self.status = c.execute("SELECT status FROM gewohnheit WHERE id = ?", (self.current_habit_id,)).fetchone()[0]
-        conn.commit()
+        row = c.execute('SELECT status FROM "gewohnheit" WHERE id=?', (self.current_habit_id,)).fetchone()
         conn.close()
-        self.statuslabel.setText(f"Score: {self.status}")
+        self.status = row[0] if row else "wip"
+        self.statuslabel.setText(f"Status: {self.status}")
 
     def set_habit(self, habit_id: int):
         self.current_habit_id = habit_id
@@ -1126,6 +1316,393 @@ class DetailAnsicht(QWidget):
             else:
                 fmt.setBackground(QColor("#ff4d4d"))   # rot = nicht gemacht
             self.calendar.setDateTextFormat(date, fmt)
+
+
+class KanbanListWidget(QListWidget):
+    habits_moved = pyqtSignal(object, str)  # ([habit_ids], new_status)
+
+    def __init__(self, target_status: str, parent=None):
+        super().__init__(parent)
+        self.target_status = target_status
+
+        self.setSelectionMode(QAbstractItemView.ExtendedSelection)
+        self.setDragEnabled(True)
+        self.setAcceptDrops(True)
+        self.setDropIndicatorShown(True)
+        self.setDefaultDropAction(Qt.MoveAction)
+
+    def startDrag(self, supportedActions):
+        items = self.selectedItems()
+        if not items:
+            return
+        ids = [str(it.data(Qt.UserRole)) for it in items if it.data(Qt.UserRole) is not None]
+        if not ids:
+            return
+
+        mime = QMimeData()
+        mime.setData("application/x-habit-ids", ",".join(ids).encode("utf-8"))
+
+        drag = QDrag(self)
+        drag.setMimeData(mime)
+        drag.exec_(Qt.MoveAction)
+
+    def dragEnterEvent(self, event):
+        if event.mimeData().hasFormat("application/x-habit-ids"):
+            event.acceptProposedAction()
+        else:
+            super().dragEnterEvent(event)
+
+    def dragMoveEvent(self, event):
+        if event.mimeData().hasFormat("application/x-habit-ids"):
+            event.acceptProposedAction()
+        else:
+            super().dragMoveEvent(event)
+
+    def dropEvent(self, event):
+        if not event.mimeData().hasFormat("application/x-habit-ids"):
+            return super().dropEvent(event)
+        
+        source = event.source()
+        raw = bytes(event.mimeData().data("application/x-habit-ids")).decode("utf-8")
+        ids = [int(x) for x in raw.split(",") if x.strip().isdigit()]
+        
+        # nur zwischen Listen verschieben
+        if not (isinstance(source, QListWidget) and source is not self):
+            event.acceptProposedAction()
+            return
+        
+        moved = []
+        for hid in ids:
+            # 1) Erst DB updaten
+            ok = set_habit_status(hid, self.target_status)
+            if not ok:
+                continue
+            # 2) Dann UI-Item rüberziehen
+            for i in range(source.count()):
+                it = source.item(i)
+                if it and it.data(Qt.UserRole) == hid:
+                    taken = source.takeItem(i)
+                    self.addItem(taken)
+                    moved.append(hid)
+                    break
+        # 3) Wichtig: moved muss echte IDs enthalten -> damit Weekly-Review reload triggert
+        self.habits_moved.emit(moved, self.target_status)
+        event.acceptProposedAction()
+
+
+class KanbanBoardWidget(QWidget):
+    habit_status_changed = pyqtSignal(int, str)
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        layout = QHBoxLayout(self)
+
+        self.col_geplant = KanbanListWidget(HABIT_STATUS_GEPLANT)
+        self.col_wip = KanbanListWidget(HABIT_STATUS_WIP)
+        self.col_impl = KanbanListWidget(HABIT_STATUS_IMPL)
+
+        for col, title in [
+            (self.col_geplant, "geplant"),
+            (self.col_wip, "wip"),
+            (self.col_impl, "implementiert"),
+        ]:
+            box = QVBoxLayout()
+            lbl = QLabel(title)
+            f = QFont(); f.setBold(True)
+            lbl.setFont(f)
+            box.addWidget(lbl)
+            box.addWidget(col)
+
+            w = QWidget()
+            w.setLayout(box)
+            w.setMinimumWidth(220)
+            layout.addWidget(w)
+
+            col.habits_moved.connect(self._on_moved)
+
+        layout.addStretch()
+
+    def _on_moved(self, moved_ids, new_status):
+        for hid in moved_ids:
+            self.habit_status_changed.emit(int(hid), new_status)
+
+    def reload(self):
+        # Listen leeren
+        for col in (self.col_geplant, self.col_wip, self.col_impl):
+            col.clear()
+
+        conn = get_conn()
+        c = conn.cursor()
+        c.execute('SELECT id, name, status FROM "gewohnheit" ORDER BY id')
+        rows = c.fetchall()
+        conn.close()
+
+        for hid, name, status in rows:
+            status = status or HABIT_STATUS_WIP
+            it = QListWidgetItem(name)
+            it.setData(Qt.UserRole, hid)
+
+            if status == HABIT_STATUS_GEPLANT:
+                self.col_geplant.addItem(it)
+            elif status == HABIT_STATUS_IMPL:
+                self.col_impl.addItem(it)
+            else:
+                self.col_wip.addItem(it)
+
+
+class HabitReviewCard(QFrame):
+    def __init__(self, habit_id: int, parent=None):
+        super().__init__(parent)
+        self.habit_id = habit_id
+        self.setFrameShape(QFrame.Box)
+        self.setStyleSheet("QFrame { border: 1px solid #b0b0b0; }")
+
+        self.week, self.year = iso_week_year(QDate.currentDate())
+        self._week_days = week_dates(QDate.currentDate())
+
+        self._save_timer = QTimer(self)
+        self._save_timer.setSingleShot(True)
+        self._save_timer.timeout.connect(self._save_reflection)
+
+        outer = QVBoxLayout(self)
+        outer.setSpacing(8)
+
+        # Kopfzeile mit Tagen (wie Screenshot)
+        days_row = QHBoxLayout()
+        days_row.setSpacing(2)
+        self.day_labels = []
+        for dname in ["MON","TUE","WED","THU","FRI","SAT","SUN"]:
+            lbl = QLabel(dname)
+            lbl.setAlignment(Qt.AlignCenter)
+            lbl.setFixedHeight(18)
+            lbl.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
+            lbl.setStyleSheet("background:#e6e6e6; border:1px solid #c8c8c8; font-size:10px;")
+            days_row.addWidget(lbl)
+        outer.addLayout(days_row)
+
+        self.lbl_title = QLabel("")
+        outer.addWidget(self.lbl_title)
+
+        # Letzte Einträge (Farbleiste für die Woche)
+        self.entries_row = QHBoxLayout()
+        self.entries_row.setSpacing(2)
+        self.entry_boxes = []
+        for _ in range(7):
+            box = QLabel("")
+            box.setFixedHeight(14)
+            box.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
+            box.setStyleSheet("background:#d9d9d9; border:1px solid #c8c8c8;")
+            self.entries_row.addWidget(box)
+            self.entry_boxes.append(box)
+        outer.addLayout(self.entries_row)
+
+        self.lbl_ref = QLabel(f"Reflektion von KW {self.week}:")
+        outer.addWidget(self.lbl_ref)
+
+        self.txt_reflection = QTextEdit()
+        self.txt_reflection.setPlaceholderText("Reflektion hier eingeben…")
+        self.txt_reflection.setMaximumHeight(90)
+        self.txt_reflection.textChanged.connect(self._on_reflection_changed)
+        outer.addWidget(self.txt_reflection)
+
+        outer.addWidget(QLabel("alte reviews:"))
+        self.txt_old = QTextEdit()
+        self.txt_old.setReadOnly(True)
+        self.txt_old.setMaximumHeight(90)
+        outer.addWidget(self.txt_old)
+
+        outer.addWidget(QLabel("Maßnahmen:"))
+        self.list_measures = QListWidget()
+        self.list_measures.setContextMenuPolicy(Qt.CustomContextMenu)
+        self.list_measures.customContextMenuRequested.connect(self._measures_context_menu)
+        outer.addWidget(self.list_measures)
+
+        btns = QHBoxLayout()
+        self.btn_plan = QPushButton("Maßnahme planen")
+        self.btn_disable = QPushButton("Außer Kraft setzen")
+        self.btn_plan.clicked.connect(lambda: self._apply_measure_status(MEASURE_STATUS_GEPLANT))
+        self.btn_disable.clicked.connect(lambda: self._apply_measure_status(MEASURE_STATUS_AUSSER_KRAFT))
+        btns.addWidget(self.btn_plan)
+        btns.addWidget(self.btn_disable)
+        outer.addLayout(btns)
+
+        self.reload()
+
+    def reload(self):
+        # Titel / Score / Status
+        conn = get_conn()
+        c = conn.cursor()
+        c.execute('SELECT name, score, status FROM "gewohnheit" WHERE id=?', (self.habit_id,))
+        row = c.fetchone()
+        conn.close()
+        if not row:
+            self.lbl_title.setText("—")
+            return
+
+        name, score, status = row
+        status = status or HABIT_STATUS_WIP
+        self.lbl_title.setText(f"{name}  score: {int(score)}%  status: {status}")
+
+        # Letzte Einträge (Woche) einfärben
+        for i, qd in enumerate(self._week_days):
+            iso = qd.toString("yyyy-MM-dd")
+            st = get_habit_day(self.habit_id, iso)  # None/0/1
+            if st == 1:
+                color = "#4caf50"
+            elif st == 0:
+                color = "#ff4d4d"
+            else:
+                color = "#d9d9d9"
+            self.entry_boxes[i].setStyleSheet(f"background:{color}; border:1px solid #c8c8c8;")
+            self.entry_boxes[i].setToolTip(qd.toString("dd.MM.yyyy"))
+
+        # Weekly reflection laden
+        self.txt_reflection.blockSignals(True)
+        self.txt_reflection.setPlainText(get_weekly_reflection(self.habit_id, self.year, self.week))
+        self.txt_reflection.blockSignals(False)
+
+        # Alte Reviews
+        olds = get_old_weekly_reflections(self.habit_id, self.year, self.week, limit=3)
+        old_text = ""
+        for y, w, txt in olds:
+            short = (txt.strip().replace("\n", " ")[:120] + "…") if len(txt.strip()) > 120 else txt.strip()
+            old_text += f"KW {w} ({y}): {short}\n"
+        self.txt_old.setPlainText(old_text.strip())
+
+        # Maßnahmen laden
+        self.list_measures.clear()
+        conn = get_conn()
+        c = conn.cursor()
+        c.execute('SELECT id, name, status FROM "maßnahme" WHERE gewohnheit_id=? ORDER BY id', (self.habit_id,))
+        rows = c.fetchall()
+        conn.close()
+        for mid, mname, mstatus in rows:
+            mstatus = mstatus or MEASURE_STATUS_AKTIV
+            it = QListWidgetItem(f"{mname}   [{mstatus}]")
+            it.setData(Qt.UserRole, int(mid))
+            self.list_measures.addItem(it)
+
+    def _on_reflection_changed(self):
+        # debounce autosave
+        self._save_timer.start(600)
+
+    def _save_reflection(self):
+        text = self.txt_reflection.toPlainText()
+        upsert_weekly_reflection(self.habit_id, self.year, self.week, text)
+
+    def _selected_measure_id(self) -> int | None:
+        it = self.list_measures.currentItem()
+        if not it:
+            return None
+        return it.data(Qt.UserRole)
+
+    def _apply_measure_status(self, status: str):
+        mid = self._selected_measure_id()
+        if mid is None:
+            return
+        set_measure_status(mid, status)
+        self.reload()
+
+    def _measures_context_menu(self, pos):
+        it = self.list_measures.itemAt(pos)
+        if not it:
+            return
+        mid = it.data(Qt.UserRole)
+        menu = QMenu(self)
+        act_a = menu.addAction("Aktivieren")
+        act_p = menu.addAction("Planen")
+        act_x = menu.addAction("Außer Kraft setzen")
+        chosen = menu.exec_(self.list_measures.mapToGlobal(pos))
+        if chosen == act_a:
+            set_measure_status(mid, MEASURE_STATUS_AKTIV)
+        elif chosen == act_p:
+            set_measure_status(mid, MEASURE_STATUS_GEPLANT)
+        elif chosen == act_x:
+            set_measure_status(mid, MEASURE_STATUS_AUSSER_KRAFT)
+        self.reload()
+
+
+class WeeklyReviewAnsicht(QWidget):
+    back_clicked = pyqtSignal()
+
+    def __init__(self):
+        super().__init__()
+        root = QVBoxLayout(self)
+
+        # Header wie Screenshot
+        header = QHBoxLayout()
+        self.btn_back = QPushButton("←")
+        self.btn_back.setFixedSize(40, 40)
+        self.btn_back.clicked.connect(self.back_clicked.emit)
+        header.addWidget(self.btn_back)
+
+        title = QLabel("Weekly-Review")
+        f = QFont(); f.setBold(True); f.setPointSize(12)
+        title.setFont(f)
+        header.addWidget(title)
+        header.addStretch()
+
+        self.btn_add_measure = QPushButton("Maßnahmen hinzufügen")
+        self.btn_add_todo = QPushButton("To-Do hinzufügen")
+        header.addWidget(self.btn_add_measure)
+        header.addWidget(self.btn_add_todo)
+        root.addLayout(header)
+
+        # Scrollbarer Bereich mit Karten (3 Spalten Layout)
+        self.scroll = QScrollArea()
+        self.scroll.setWidgetResizable(True)
+        self.cards_widget = QWidget()
+        self.grid = QHBoxLayout(self.cards_widget)
+        self.grid.setSpacing(12)
+        self.scroll.setWidget(self.cards_widget)
+        root.addWidget(self.scroll)
+
+        # Kanban Board darunter (zusätzlich, weil du es explizit wolltest)
+        root.addSpacing(10)
+        root.addWidget(QLabel("Kanban-Board (Drag & Drop):"))
+        self.kanban = KanbanBoardWidget()
+        root.addWidget(self.kanban)
+
+        self.btn_add_measure.clicked.connect(self._open_add_measure)
+        self.btn_add_todo.clicked.connect(self._open_add_todo)
+        self.kanban.habit_status_changed.connect(lambda *_: self.reload())
+
+        self.reload()
+
+    def _open_add_measure(self):
+        dlg = MassnahmeHinzufuegenDialog(self)
+        if dlg.exec_() == QDialog.Accepted:
+            self.reload()
+
+    def _open_add_todo(self):
+        dlg = TodoHinzufuegenDialog(self)
+        if dlg.exec_() == QDialog.Accepted:
+            self.reload()
+
+    def reload(self):
+        # Karten leeren
+        while self.grid.count():
+            item = self.grid.takeAt(0)
+            w = item.widget()
+            if w:
+                w.deleteLater()
+
+        # nur WIP Gewohnheiten anzeigen
+        conn = get_conn()
+        c = conn.cursor()
+        c.execute('SELECT id FROM "gewohnheit" WHERE status=? ORDER BY id', (HABIT_STATUS_WIP,))
+        ids = [r[0] for r in c.fetchall()]
+        conn.close()
+
+        for hid in ids:
+            card = HabitReviewCard(hid)
+            card.setMinimumWidth(280)
+            self.grid.addWidget(card)
+
+        self.grid.addStretch()
+
+        # Kanban reload (alle Status)
+        self.kanban.reload()
 # -------------------------
 # Main Window
 # -------------------------
@@ -1138,7 +1715,8 @@ class MainWindow(QWidget):
 
         self.btn_gewohnheiten = QPushButton("Gewohnheiten")
         self.btn_maßnahmen = QPushButton("Alle maßnahmen")
-
+        self.btn_weekly = QPushButton("Weekly-Review")
+        
         self.init_ui()
         self.connect_signals()
 
@@ -1152,15 +1730,18 @@ class MainWindow(QWidget):
         self.view_maßnahmen = maßnahmenAnsicht() 
         self.view_detail = DetailAnsicht()
         self.view_measure_detail = MassnahmeDetailAnsicht()
+        self.view_weekly = WeeklyReviewAnsicht()
         
         self.stack.addWidget(self.view_gewohnheiten)     # Index 0
         self.stack.addWidget(self.view_maßnahmen)       # Index 1
         self.stack.addWidget(self.view_detail)           # Index 2
         self.stack.addWidget(self.view_measure_detail)   # Index 3
+        self.stack.addWidget(self.view_weekly)           # Index 4
 
         sidebar_layout = QVBoxLayout()
         sidebar_layout.addWidget(self.btn_gewohnheiten)
         sidebar_layout.addWidget(self.btn_maßnahmen)
+        sidebar_layout.addWidget(self.btn_weekly)
         sidebar_layout.addStretch()
 
         main_layout = QHBoxLayout(self)
@@ -1197,21 +1778,29 @@ class MainWindow(QWidget):
             self.view_maßnahmen.lade_maßnahmen(),
             self.view_maßnahmen.lade_todos()
         })
+        def open_weekly_view():
+            self.view_weekly.reload()
+            self.stack.setCurrentWidget(self.view_weekly)
+        self.btn_weekly.clicked.connect(open_weekly_view)
+        self.view_weekly.back_clicked.connect(lambda: self.stack.setCurrentWidget(self.view_gewohnheiten))
 
-    def calculate_score(self,habit_id):
+    def calculate_score(self, habit_id):
         conn = get_conn()
         c = conn.cursor()
         rows = c.execute("""
-            SELECT status
-            FROM gewohnheit_historie
-            WHERE gewohnheit_id = ?;
-            """, (habit_id,)).fetchall()
-        werte = [row[0] for row in rows]
-        score = int(sum(werte)/(len(werte)+1)*100) #TODO: Division durch 0 cleaner fixen
+                         SELECT status
+                         FROM gewohnheit_historie
+                         WHERE gewohnheit_id = ?;
+        """, (habit_id,)).fetchall()
+        werte = [row[0] for row in rows if row[0] in (0, 1)]
+        
+        score = int((sum(werte) / len(werte)) * 100) if len(werte) > 0 else 70
+        
         c.execute("""
-            UPDATE gewohnheit
-            SET score = ?
-            """, (score,))
+                  UPDATE gewohnheit
+                  SET score = ?
+                  WHERE id = ?
+        """, (score, habit_id))
         conn.commit()
         conn.close()
         
@@ -1227,25 +1816,19 @@ class MainWindow(QWidget):
         self.stack.setCurrentWidget(self.view_measure_detail)
         
     def on_habit_deleted(self, habit_id: int):
+        # Wenn gerade die gelöschte Gewohnheit offen ist, zurück zur Liste
         if self.stack.currentWidget() == self.view_detail and self.view_detail.current_habit_id == habit_id:
             self.stack.setCurrentWidget(self.view_gewohnheiten)
-            
-        # Gesamtmaßnahmen-Ansicht aktualisieren (weil maßnahmen mitgelöscht wurden)
+    
+        # Listen/Ansichten aktualisieren
+        self.view_gewohnheiten.lade_gewohnheiten()
         self.view_maßnahmen.lade_maßnahmen()
         self.view_maßnahmen.lade_todos()
-        
-        # Wenn gerade die gelöschte Gewohnheit offen ist, zurück zur Liste
-        if self.stack.currentIndex() == 2 and self.view_detail.current_habit_id == habit_id:
-            self.stack.setCurrentIndex(0)
+    
+        # Weekly/Kanban aktualisieren
+        if hasattr(self, "view_weekly"):
+            self.view_weekly.reload()
             
-        self.view_detail.apply_history_to_calendar_for_current_month()
-        self.calculate_score(habit_id)
-        self.view_detail.update_score()
-        self.view_detail.update_status()
-
-    def go_back_to_list(self):
-        self.stack.setCurrentWidget(self.view_gewohnheiten)
-
 if __name__ == "__main__":
     setup_test_database()
     app = QApplication(sys.argv)
